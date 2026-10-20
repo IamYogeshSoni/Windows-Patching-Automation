@@ -1,0 +1,458 @@
+/* Email Report Preview Dialog - CDK theme (all colours from src/index.css tokens) */
+
+.erp-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  backdrop-filter: blur(6px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  animation: erpFadeIn 0.2s ease-out;
+}
+
+@keyframes erpFadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.erp-modal-container {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-glass);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 960px;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  color: var(--text-main);
+}
+
+/* Header */
+.erp-modal-header {
+  padding: 1.25rem 1.75rem;
+  border-bottom: 1px solid var(--border-glass);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  background: var(--bg-subtle);
+}
+
+.erp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.65rem;
+  background: var(--info-dim);
+  color: var(--info);
+  font-size: 0.75rem;
+  font-weight: 700;
+  border-radius: 9999px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.erp-header-title h2 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0.35rem 0 0.2rem;
+  letter-spacing: -0.02em;
+}
+
+.erp-header-sub {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.erp-close-btn {
+  background: transparent;
+  border: none;
+  font-size: 1.15rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.4rem;
+  border-radius: 6px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.erp-close-btn:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-main);
+}
+
+/* Metadata Bar */
+.erp-meta-bar {
+  padding: 0.75rem 1.75rem;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-glass);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+}
+
+.erp-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.erp-meta-label {
+  font-weight: 700;
+  color: var(--text-muted);
+  min-width: 80px;
+}
+
+.erp-meta-value {
+  color: var(--text-main);
+  font-weight: 700;
+}
+
+.erp-meta-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.erp-email-tag {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-glass);
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  color: var(--text-main);
+  font-size: 0.75rem;
+}
+
+/* Email Canvas — follows the app theme (the original design already themed
+   the email body dark in dark mode, so it is not treated as a fixed white "paper" mock) */
+.erp-email-canvas {
+  padding: 1.25rem 1.75rem;
+  background: var(--bg-base);
+  overflow-y: auto;
+  flex: 1;
+}
+
+.erp-email-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  padding: 1.5rem;
+  box-shadow: var(--shadow-card);
+}
+
+.erp-email-brand {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid var(--accent);
+  margin-bottom: 1.25rem;
+}
+
+.erp-brand-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.erp-brand-nova {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--accent-text);
+  letter-spacing: -0.02em;
+}
+
+/* Inverted chip: dark-on-light in light theme, light-on-dark in dark theme */
+.erp-brand-tag {
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: var(--text-main);
+  color: var(--bg-panel);
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+}
+
+.erp-email-timestamp {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* KPI Grid */
+.erp-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+@media (max-width: 640px) {
+  .erp-kpi-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.erp-kpi-item {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  padding: 0.85rem;
+  text-align: center;
+}
+
+.erp-kpi-num {
+  display: block;
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.erp-kpi-num.alert {
+  color: var(--accent-text);
+}
+
+.erp-kpi-title {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  font-weight: 700;
+}
+
+/* Section Headings */
+.erp-section-heading {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 1.25rem 0 0.65rem;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Table */
+.erp-table-responsive {
+  overflow-x: auto;
+}
+
+.erp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.erp-table th {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-weight: 500;
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-glass-strong);
+}
+
+.erp-table td {
+  padding: 0.65rem 0.75rem;
+  border-bottom: 1px solid var(--border-glass);
+  vertical-align: top;
+}
+
+.erp-row-attention {
+  background: var(--warning-dim);
+}
+
+.erp-sub-text {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.erp-chip {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+}
+
+.erp-chip.healthy, .erp-chip.valid {
+  background: var(--success-dim);
+  color: var(--success);
+}
+
+.erp-chip.attention {
+  background: var(--warning-dim);
+  color: var(--warning);
+}
+
+.erp-chip.fail {
+  background: var(--danger-dim);
+  color: var(--danger);
+}
+
+.erp-teams-tag {
+  color: var(--secondary);
+  font-weight: 500;
+  font-size: 0.72rem;
+}
+
+/* Alerts Section in Email */
+.erp-alerts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.erp-alert-item {
+  padding: 0.75rem 0.95rem;
+  border-radius: 6px;
+  border-left: 4px solid var(--danger-solid);
+  background: var(--danger-dim);
+}
+
+.erp-alert-item.info {
+  border-left-color: var(--info-solid);
+  background: var(--info-dim);
+}
+
+.erp-alert-item.resolved {
+  border-left-color: var(--success-solid);
+  background: var(--success-dim);
+}
+
+.erp-alert-header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.25rem;
+}
+
+.erp-alert-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: var(--danger-solid);
+  color: var(--on-accent);
+}
+
+.erp-alert-item.info .erp-alert-badge {
+  background: var(--info-solid);
+}
+
+.erp-alert-item.resolved .erp-alert-badge {
+  background: var(--success-solid);
+}
+
+.erp-alert-app {
+  font-size: 0.8rem;
+  color: var(--text-main);
+}
+
+.erp-alert-channel {
+  font-size: 0.72rem;
+  color: var(--secondary);
+}
+
+.erp-alert-time {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.erp-alert-summary {
+  font-size: 0.75rem;
+  color: var(--text-main);
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* Modal Footer */
+.erp-modal-footer {
+  padding: 1rem 1.75rem;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-glass);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.erp-test-email-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.erp-test-label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.erp-test-input {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border-glass-strong);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  min-width: 220px;
+  background: var(--bg-panel);
+  color: var(--text-main);
+}
+
+.erp-test-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.erp-btn {
+  padding: 0.48rem 1rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  border: 1px solid transparent;
+}
+
+.erp-btn-action {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.erp-btn-action:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.erp-btn-secondary {
+  background: var(--bg-panel);
+  border-color: var(--border-glass-strong);
+  color: var(--text-main);
+}
+
+.erp-btn-secondary:hover {
+  background: var(--bg-glass-hover);
+}
+
+.erp-send-toast {
+  font-size: 0.78rem;
+  color: var(--success);
+  font-weight: 500;
+  animation: erpFadeIn 0.2s ease;
+}
+
+.erp-footer-actions {
+  display: flex;
+  gap: 0.5rem;
+}

@@ -1,0 +1,1744 @@
+
+import os
+import re
+import html
+import json
+import hmac
+import base64
+import sqlite3
+import hashlib
+import secrets
+import subprocess
+import threading
+import getpass
+import time
+from collections import deque
+from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone, timedelta
+from threading import Lock
+from typing import List, Optional
+
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+def _env(name: str, default: str) -> str:
+    return (os.environ.get(name) or default).strip()
+
+
+JUMPHOST = _env("SCCM_JUMPHOST", "ORDPGBLWTS21.global.cdk.com")
+SITE_SERVER = _env("SCCM_SITE_SERVER", "ORDPGBLSCCM11.global.cdk.com")
+SITE_CODE = _env("SCCM_SITE_CODE", "T01")
+
+# RunAs endpoint registered on the jumphost (Register-PSSessionConfiguration).
+SESSION_CONFIG = _env("SCCM_SESSION_CONFIG", "SCCMAutomation")
+
+# The Automation folder on the jumphost (Run-Patching.ps1, Scripts\, Config\, Reports\).
+PROJECT_ROOT = _env(
+    "SCCM_PROJECT_ROOT",
+    r"C:\Users\soniyoge1\Downloads"
+    r"\SCCM_EndToEnd_Automation_Test_Package"
+    r"\SCCM_EndToEnd_Automation",
+)
+
+SCRIPTS = {
+    "environment": "00-EnvironmentCheck.ps1",
+    "prerequisites": "01-PrerequisiteChecks.ps1",
+    "deployment": "04-DeployAndValidatePatches.ps1",
+}
+
+# Exact membership the read-only dry run checks. Deployments use the
+# allowlist in Config\TestServers.json on the jumphost instead.
+ALLOWED_TARGETS = {
+    "C03DGHHYPV8871",
+    "C03DGHHYPV3621",
+}
+
+# Deployment creation stays off until the SCCM administrator has confirmed
+# console/site compatibility and authorized writes. The jumphost's
+# Config\Settings.json must also have AllowWriteOperations = true.
+ALLOW_DEPLOYMENT = _env("SCCM_ALLOW_DEPLOYMENT", "false").lower() == "true"
+
+DEPLOY_TIMEOUT_SECONDS = int(float(_env("SCCM_DEPLOY_TIMEOUT_HOURS", "12")) * 3600)
+
+# Seconds a single PowerShell job may run before it is stopped.
+JOB_TIMEOUTS = {
+    "connection_test": 300,
+    "environment": 900,
+    "prerequisites": 1800,
+    "inventory": 1800,
+    "dry_run": 1800,
+    "deployment": DEPLOY_TIMEOUT_SECONDS,
+    "deployment_resume": DEPLOY_TIMEOUT_SECONDS,
+    "deployment_lookup": 900,
+    "dslab_connection_test": 300,
+    "dslab_validate": 1800,
+}
+
+# Long-running deployments get their own worker so checks keep working.
+DEPLOY_KINDS = {"deployment", "deployment_resume"}
+
+# Inventory and dry-run results older than this cannot feed the next step.
+RESULT_MAX_AGE = timedelta(hours=24)
+
+# The maintenance window must still be open at least this long after submission.
+MIN_WINDOW_REMAINING = timedelta(minutes=30)
+MAX_WINDOW_START_AHEAD = timedelta(days=30)
+
+# Longest a GET /api/jobs/{job_id}?wait=N call may hold the request open.
+MAX_POLL_WAIT_SECONDS = 120
+MAX_LOG_LINES_PER_RESPONSE = 1000
+
+DB_PATH = _env(
+    "SCCM_JOB_DB",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "jobs.db"),
+)
+
+API_KEY = os.environ.get("SCCM_API_KEY")
+if not API_KEY:
+    raise RuntimeError(
+        "Set SCCM_API_KEY in the current PowerShell session first."
+    )
+
+USERNAME = (os.environ.get("SCCM_USERNAME") or input(
+    r"Authorized domain username (e.g. GLOBAL\username): "
+)).strip()
+PASSWORD = os.environ.get("SCCM_PASSWORD") or getpass.getpass("Jumphost password: ")
+
+if not USERNAME or not PASSWORD:
+    raise RuntimeError("Credentials are required.")
+
+# Admin account on the target servers (e.g. DSLAB\admin), passed to the
+# deployment script for KB checks and restarts over WinRM. Optional: without
+# it the script relies on SCCM and lets the SCCM client restart the servers.
+TARGET_USERNAME = (os.environ.get("SCCM_TARGET_USERNAME") or input(
+    r"Target server admin account (e.g. DSLAB\admin, Enter to skip): "
+)).strip()
+TARGET_PASSWORD = ""
+if TARGET_USERNAME:
+    TARGET_PASSWORD = os.environ.get("SCCM_TARGET_PASSWORD") or getpass.getpass(
+        f"Password for {TARGET_USERNAME}: "
+    )
+
+# DSLAB jumphost: validates DSLAB servers from inside their own domain (as the
+# server-list SOP does). The account logs on to the jumphost and to the servers.
+DSLAB_JUMPHOST = _env("SCCM_DSLAB_JUMPHOST", "ordpdslwts01.dslab.ad.adp.com")
+DSLAB_USERNAME = _env("SCCM_DSLAB_USERNAME", r"dslab\svc_patching_auto1")
+DSLAB_SESSION_CONFIG = (os.environ.get("SCCM_DSLAB_SESSION_CONFIG") or "").strip()
+DSLAB_AUTH = _env("SCCM_DSLAB_AUTH", "Negotiate")
+DSLAB_DOMAIN = _env("SCCM_DSLAB_DOMAIN", "dslab.ad.adp.com")
+DSLAB_PASSWORD = os.environ.get("SCCM_DSLAB_PASSWORD") or getpass.getpass(
+    f"Password for {DSLAB_USERNAME} on {DSLAB_JUMPHOST} (Enter to skip DSLAB checks): "
+)
+
+print(
+    f"Jumphost login: {USERNAME} "
+    f"(username from {'SCCM_USERNAME' if os.environ.get('SCCM_USERNAME') else 'prompt'}, "
+    f"password from {'SCCM_PASSWORD' if os.environ.get('SCCM_PASSWORD') else 'prompt'}); "
+    f"endpoint '{SESSION_CONFIG}' on {JUMPHOST}; "
+    f"target servers: {TARGET_USERNAME or 'no account (SCCM-only validation)'}; "
+    f"DSLAB jumphost: {DSLAB_JUMPHOST + ' as ' + DSLAB_USERNAME if DSLAB_PASSWORD else 'not configured'}",
+    flush=True,
+)
+
+# Browser origins allowed to call the API (the frontend's dev/prod URLs).
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in _env(
+        "SCCM_CORS_ORIGINS", "http://localhost:3000,http://localhost:5173"
+    ).split(",")
+    if origin.strip()
+]
+
+app = FastAPI(
+    title="SCCM Patching Automation API",
+    version="3.0.0",
+    description=(
+        "Environment checks, inventory, read-only dry runs and Required "
+        "deployments run end to end by 04-DeployAndValidatePatches.ps1 on the "
+        "jumphost. Every operation is a background job; poll "
+        "GET /api/jobs/{job_id}?wait=N&log_after=M for status and live log lines."
+    ),
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["X-API-Key", "Idempotency-Key", "Content-Type"],
+)
+
+
+# ============================================================
+# POWERSHELL EXECUTION
+# ============================================================
+
+# Everything the remote side prints is streamed back line by line and stored
+# as the job log. The final result is one JSON line starting with this marker.
+RESULT_MARKER = "##RESULT## "
+
+POWERSHELL_WRAPPER = r"""
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+$operation = $env:SCCM_OPERATION | ConvertFrom-Json
+
+$secure = ConvertTo-SecureString $env:SCCM_PASSWORD -AsPlainText -Force
+$credential = [System.Management.Automation.PSCredential]::new(
+    $env:SCCM_USERNAME, $secure
+)
+$remoteScript = [scriptblock]::Create($env:SCCM_REMOTE_SCRIPT)
+$targetCredential = $null
+if ($env:SCCM_TARGET_USERNAME) {
+    $targetCredential = [System.Management.Automation.PSCredential]::new(
+        $env:SCCM_TARGET_USERNAME,
+        (ConvertTo-SecureString $env:SCCM_TARGET_PASSWORD -AsPlainText -Force)
+    )
+}
+$session = $null
+
+try {
+    # Which jumphost, endpoint and authentication come from the job's target
+    # (the SCCM jumphost or the DSLAB jumphost).
+    $sessionParams = @{
+        ComputerName = $env:SCCM_JUMPHOST
+        Authentication = $env:SCCM_SESSION_AUTH
+        Credential = $credential
+        ErrorAction = 'Stop'
+    }
+    if ($env:SCCM_SESSION_CONFIG) { $sessionParams.ConfigurationName = $env:SCCM_SESSION_CONFIG }
+    try {
+        $session = New-PSSession @sessionParams
+    }
+    catch {
+        throw (
+            "Could not open a session on $($env:SCCM_JUMPHOST) " +
+            "(endpoint '$(if ($env:SCCM_SESSION_CONFIG) { $env:SCCM_SESSION_CONFIG } else { 'default' })', " +
+            "$($env:SCCM_SESSION_AUTH)) as $($env:SCCM_USERNAME): " +
+            $_.Exception.Message
+        )
+    }
+
+    # All remote streams come back through the pipeline (*>&1) and are written
+    # as plain lines, so warnings and errors appear in the job log as they
+    # happen instead of as serialized XML on stderr when the process ends.
+    $payload = Invoke-Command -Session $session -ErrorAction Stop `
+        -ArgumentList $operation, $env:SCCM_SITE_SERVER, $env:SCCM_SITE_CODE, $targetCredential `
+        -ScriptBlock $remoteScript *>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.InformationRecord]) { Write-Host "$($_.MessageData)" }
+            elseif ($_ -is [System.Management.Automation.WarningRecord]) { Write-Host "WARNING: $($_.Message)" }
+            elseif ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host "ERROR: $($_.Exception.Message)" }
+            elseif ($_ -is [System.Management.Automation.VerboseRecord] -or $_ -is [System.Management.Automation.DebugRecord]) { }
+            else { $_ }
+        }
+
+    $last = @($payload)[-1]
+    '##RESULT## ' + ($last |
+        Select-Object -Property * -ExcludeProperty PSComputerName, RunspaceId, PSShowComputerName |
+        ConvertTo-Json -Depth 10 -Compress)
+}
+catch {
+    '##RESULT## ' + ([pscustomobject]@{
+        success = $false
+        errors = @($_.Exception.Message)
+    } | ConvertTo-Json -Depth 8 -Compress)
+}
+finally {
+    if ($null -ne $session) {
+        Remove-PSSession $session -ErrorAction SilentlyContinue
+    }
+}
+"""
+
+# The remote part: runs inside the jumphost session.
+REMOTE_SCRIPT = r"""
+        param($operation, $siteServer, $siteCode, $targetCredential)
+
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+
+        # Say where and as whom any failure happened, e.g. to tell a
+        # jumphost folder permission problem from an SCCM rights problem.
+        $runAs = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        trap { throw "[$env:COMPUTERNAME as $runAs] $($_.Exception.Message)" }
+
+        $modulePath = Join-Path ${env:ProgramFiles(x86)} `
+            'Microsoft Configuration Manager\AdminConsole\bin\ConfigurationManager\ConfigurationManager.psd1'
+
+        # Reports each access separately and never stops early, so one call
+        # shows where an "access denied" comes from.
+        if ($operation.Kind -eq 'ConnectionTest') {
+            $root = [string]$operation.ProjectRoot
+
+            $scriptsFolder = try {
+                $count = @(Get-ChildItem -LiteralPath (Join-Path $root 'Scripts') -ErrorAction Stop).Count
+                "OK: $count files"
+            } catch { "FAILED: $($_.Exception.Message)" }
+
+            $reportsFolder = try {
+                $reports = Join-Path $root 'Reports'
+                New-Item -ItemType Directory -Path $reports -Force -ErrorAction Stop | Out-Null
+                $probe = Join-Path $reports '.api_write_test'
+                Set-Content -LiteralPath $probe -Value 'x' -ErrorAction Stop
+                Remove-Item -LiteralPath $probe -ErrorAction Stop
+                'OK: writable'
+            } catch { "FAILED: $($_.Exception.Message)" }
+
+            $sccm = try {
+                Import-Module $modulePath -ErrorAction Continue 2>$null 3>$null
+                if (-not (Get-Module ConfigurationManager)) { throw 'ConfigurationManager module did not load.' }
+                if (-not (Get-PSDrive -Name $siteCode -PSProvider CMSite -ErrorAction SilentlyContinue)) {
+                    New-PSDrive -Name $siteCode -PSProvider CMSite -Root $siteServer `
+                        -ErrorAction Continue 2>$null 3>$null | Out-Null
+                }
+                Set-Location "$($siteCode):\"
+                $site = Get-CMSite -ErrorAction Stop
+                "OK: site $($site.SiteCode) version $($site.Version)"
+            } catch { "FAILED: $($_.Exception.Message)" }
+
+            $targets = if ($targetCredential) { "account $($targetCredential.UserName) supplied" } else { 'no account supplied (SCCM-only validation)' }
+
+            return [pscustomobject]@{
+                success = $true
+                host = $env:COMPUTERNAME
+                run_as = $runAs
+                project_root = $root
+                scripts_folder = $scriptsFolder
+                reports_folder = $reportsFolder
+                sccm = $sccm
+                target_servers = $targets
+            }
+        }
+
+        # A new remoting session has no CMSite drive, so create it here, in
+        # the global scope so the project scripts also find it. The session
+        # runs under the jumphost's RunAs endpoint (SCCM_SESSION_CONFIG),
+        # which holds a full logon and so avoids the Kerberos double hop.
+        # The module reports a console/site version mismatch as a
+        # non-terminating error. An interactive console shows it and carries
+        # on, so do the same here: collect it, then fail only if the module
+        # or the drive is actually missing.
+        $cmWarnings = @()
+        if (-not (Get-Module ConfigurationManager)) {
+            Import-Module $modulePath -ErrorAction Continue `
+                -ErrorVariable +cmWarnings 2>$null 3>$null
+        }
+        if (-not (Get-Module ConfigurationManager)) {
+            throw "ConfigurationManager module failed to load: $($cmWarnings -join '; ')"
+        }
+        if (-not (Get-PSDrive -Name $siteCode -PSProvider CMSite -ErrorAction SilentlyContinue)) {
+            New-PSDrive -Name $siteCode -PSProvider CMSite -Root $siteServer `
+                -Scope Global -ErrorAction Continue `
+                -ErrorVariable +cmWarnings 2>$null 3>$null | Out-Null
+        }
+        if (-not (Get-PSDrive -Name $siteCode -PSProvider CMSite -ErrorAction SilentlyContinue)) {
+            throw "$siteCode CMSite drive could not be created: $($cmWarnings -join '; ')"
+        }
+        $cmWarnings = @($cmWarnings | ForEach-Object { "$_" } | Sort-Object -Unique)
+
+        function Get-VerifiedSite {
+            Set-Location "$($siteCode):\"
+            $site = Get-CMSite -ErrorAction Stop
+            if ($site.SiteCode -ne $siteCode) {
+                throw "Unexpected site code: $($site.SiteCode)"
+            }
+            $site
+        }
+
+        # Resolves the SUG and collection by their stable IDs and checks the
+        # collection contains exactly the allowlisted servers.
+        function Get-ValidatedSelection {
+            param($SugId, $CollectionId, $AllowedTargets)
+
+            $sug = @(Get-CMSoftwareUpdateGroup -Id ([int]$SugId) -ErrorAction Stop)
+            if ($sug.Count -ne 1) {
+                throw "SUG ID $SugId did not resolve to exactly one software update group."
+            }
+            $sugName = if ($sug[0].LocalizedDisplayName) {
+                $sug[0].LocalizedDisplayName
+            } else {
+                $sug[0].Name
+            }
+
+            $collection = @(Get-CMDeviceCollection -Id ([string]$CollectionId) -ErrorAction Stop)
+            if ($collection.Count -ne 1) {
+                throw "Collection ID $CollectionId did not resolve to exactly one collection."
+            }
+
+            $memberNames = @(
+                Get-CMDevice -CollectionId ([string]$CollectionId) -Fast -ErrorAction Stop |
+                ForEach-Object { $_.Name.ToUpperInvariant() } |
+                Sort-Object -Unique
+            )
+            $expected = @($AllowedTargets |
+                ForEach-Object { $_.ToUpperInvariant() } |
+                Sort-Object -Unique)
+            $missing = @($expected | Where-Object { $_ -notin $memberNames })
+            $unexpected = @($memberNames | Where-Object { $_ -notin $expected })
+
+            if ($missing.Count -gt 0 -or
+                $unexpected.Count -gt 0 -or
+                $memberNames.Count -ne $expected.Count) {
+                throw (
+                    "Collection membership mismatch. " +
+                    "Missing=[$($missing -join ',')]; " +
+                    "Unexpected=[$($unexpected -join ',')]."
+                )
+            }
+
+            $updates = @(
+                Get-CMSoftwareUpdate -UpdateGroupName $sugName `
+                    -Fast -ErrorAction Stop
+            )
+            if ($updates.Count -eq 0) {
+                throw "No updates found in SUG '$sugName'."
+            }
+
+            [pscustomobject]@{
+                SugId = [string]$SugId
+                SugName = [string]$sugName
+                CollectionId = [string]$CollectionId
+                CollectionName = [string]$collection[0].Name
+                Targets = $memberNames
+                Updates = $updates
+            }
+        }
+
+        switch ($operation.Kind) {
+            'RunFixedScript' {
+                $path = $operation.Path
+
+                if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                    throw "Script not found: $path"
+                }
+
+                # Scripts expect to start from the project root, as in Run Docs.
+                Set-Location (Split-Path (Split-Path $path -Parent) -Parent)
+
+                # Show every line live (job log) and keep it for the result.
+                # Scripts that prompt with Read-Host are not used by this endpoint.
+                $items = @(& $path *>&1 | ForEach-Object { Write-Host "$_"; $_ })
+                $text = ($items | ForEach-Object { "$_" }) -join "`n"
+
+                [pscustomobject]@{
+                    success = $true
+                    warnings = $cmWarnings
+                    run_as = $runAs
+                    host = $env:COMPUTERNAME
+                    script = $path
+                    output = $text
+                    errors = @()
+                }
+            }
+
+            'Inventory' {
+                $site = Get-VerifiedSite
+
+                $sugs = @(
+                    Get-CMSoftwareUpdateGroup -ErrorAction Stop |
+                    Sort-Object LocalizedDisplayName |
+                    ForEach-Object {
+                        $name = if ($_.LocalizedDisplayName) {
+                            $_.LocalizedDisplayName
+                        } else {
+                            $_.Name
+                        }
+
+                        [pscustomobject]@{
+                            id = [string]$_.CI_ID
+                            name = [string]$name
+                        }
+                    }
+                )
+
+                $collections = @(
+                    Get-CMDeviceCollection -ErrorAction Stop |
+                    Sort-Object Name |
+                    ForEach-Object {
+                        [pscustomobject]@{
+                            id = [string]$_.CollectionID
+                            name = [string]$_.Name
+                            member_count = [int]$_.MemberCount
+                        }
+                    }
+                )
+
+                [pscustomobject]@{
+                    success = $true
+                    warnings = $cmWarnings
+                    run_as = $runAs
+                    host = $env:COMPUTERNAME
+                    site = [string]$site.SiteCode
+                    site_version = [string]$site.Version
+                    sugs = $sugs
+                    collections = $collections
+                }
+            }
+
+            'DryRun' {
+                $site = Get-VerifiedSite
+                $selection = Get-ValidatedSelection `
+                    $operation.SugId $operation.CollectionId $operation.AllowedTargets
+                $updates = $selection.Updates
+
+                [pscustomobject]@{
+                    success = $true
+                    warnings = $cmWarnings
+                    run_as = $runAs
+                    mode = 'READ_ONLY_DRY_RUN'
+                    site = [string]$site.SiteCode
+                    site_version = [string]$site.Version
+                    selected_sug = $selection.SugName
+                    selected_sug_id = $selection.SugId
+                    selected_collection = $selection.CollectionName
+                    selected_collection_id = $selection.CollectionId
+                    targets = $selection.Targets
+                    update_count = $updates.Count
+                    updates = @(
+                        $updates | Select-Object -First 100 |
+                        ForEach-Object {
+                            [pscustomobject]@{
+                                title = [string]$_.LocalizedDisplayName
+                                article_id = [string]$_.ArticleID
+                                ci_id = [string]$_.CI_ID
+                            }
+                        }
+                    )
+                    update_list_truncated = ($updates.Count -gt 100)
+                    deployment_created = $false
+                }
+            }
+
+            # Runs the proven end-to-end script unattended: collection, content,
+            # maintenance window, Required deployment, install, restart and KB
+            # validation. Its console output streams back as the job log.
+            'RunDeployment' {
+                $root = [string]$operation.ProjectRoot
+                $scriptPath = Join-Path $root 'Scripts\04-DeployAndValidatePatches.ps1'
+                if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+                    throw "No deployment created. Script not found: $scriptPath"
+                }
+
+                $p = @{ Confirm = $false }
+                if ($operation.Resume) {
+                    $p.Resume = $true
+                    if ($operation.ReportFolder) { $p.ResumeFrom = Join-Path $root "Reports\$($operation.ReportFolder)" }
+                } else {
+                    # The script would prompt if a deployment with this name exists;
+                    # unattended, refuse up front instead.
+                    Push-Location "$($siteCode):\"
+                    try {
+                        $existing = @(Get-CMSoftwareUpdateDeployment -Name ([string]$operation.DeploymentName) -ErrorAction SilentlyContinue)
+                    } finally { Pop-Location }
+                    if ($existing.Count -gt 0) {
+                        throw ("No deployment created. A deployment named '$($operation.DeploymentName)' already exists. " +
+                            'Use a new name, or POST /api/sccm/deployments/resume to continue a run that was cut off.')
+                    }
+
+                    $p.SugName = [string]$operation.SugName
+                    $p.CollectionName = [string]$operation.CollectionName
+                    $p.NewCollectionName = [string]$operation.CollectionName   # created without prompting if missing
+                    $p.DeploymentName = [string]$operation.DeploymentName
+                    $p.ConfirmDeploymentName = [string]$operation.DeploymentName
+                    $p.ChangeTicket = [string]$operation.ChangeTicket
+                    $p.Approver = [string]$operation.Approver
+                    $p.ApprovalReference = [string]$operation.ApprovalReference
+                    $p.MaintenanceWindowStartUtc = [string]$operation.MaintenanceWindowStartUtc
+                    $p.MaintenanceWindowHours = [int]$operation.MaintenanceWindowHours
+                    if ($operation.LimitingCollectionName) { $p.LimitingCollectionName = [string]$operation.LimitingCollectionName }
+                    $kbs = @($operation.Kb | Where-Object { $_ })
+                    if ($kbs.Count -gt 0) { $p.Kb = [string[]]$kbs }
+                }
+                if ($operation.RestartMode) { $p.RestartMode = [string]$operation.RestartMode }
+                if ($targetCredential) { $p.TargetCredential = $targetCredential }
+
+                Set-Location $root
+                $started = Get-Date
+                Write-Host "Running $scriptPath on $env:COMPUTERNAME as $runAs$(if ($targetCredential) { "; server account $($targetCredential.UserName)" })"
+                & $scriptPath @p | Out-Host
+                $exitCode = $LASTEXITCODE
+
+                # Collect the run's report (Summary.json + Validation_KBs.csv).
+                $summaryFile = Get-ChildItem -LiteralPath (Join-Path $root 'Reports') -Recurse -Filter Summary.json -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -ge $started.AddSeconds(-5) } |
+                    Sort-Object LastWriteTime | Select-Object -Last 1
+                $summary = $null
+                $validation = @()
+                $folder = $null
+                if ($summaryFile) {
+                    $folder = $summaryFile.DirectoryName
+                    $summary = Get-Content -LiteralPath $summaryFile.FullName -Raw | ConvertFrom-Json
+                    $csv = Join-Path $folder 'Validation_KBs.csv'
+                    if (Test-Path -LiteralPath $csv) { $validation = @(Import-Csv -LiteralPath $csv) }
+                }
+                $errorText = if ($summary -and $summary.PSObject.Properties['Error']) { [string]$summary.Error } else { $null }
+
+                [pscustomobject]@{
+                    success = ($exitCode -eq 0)
+                    exit_code = $exitCode
+                    warnings = $cmWarnings
+                    run_as = $runAs
+                    host = $env:COMPUTERNAME
+                    report_folder = $folder
+                    report_folder_name = if ($folder) { Split-Path $folder -Leaf } else { $null }
+                    deployment_name = if ($summary) { $summary.DeploymentName } else { [string]$operation.DeploymentName }
+                    deployment_created = [bool]($summary -and $summary.PSObject.Properties['Deployment'] -and $summary.Deployment)
+                    sug = if ($summary) { $summary.SUG } else { $null }
+                    collection = if ($summary) { $summary.Collection } else { $null }
+                    collection_created = [bool]($summary -and $summary.PSObject.Properties['CollectionCreated'] -and $summary.CollectionCreated)
+                    deployment = if ($summary -and $summary.PSObject.Properties['Deployment']) { $summary.Deployment } else { $null }
+                    maintenance_window = if ($summary -and $summary.PSObject.Properties['MaintenanceWindow']) { $summary.MaintenanceWindow } else { $null }
+                    servers = if ($summary -and $summary.PSObject.Properties['Results']) { @($summary.Results) } else { @() }
+                    validation = $validation
+                    errors = if ($errorText) { @($errorText) } elseif ($exitCode -ge 2 -or -not $summary) { @("The deployment script ended with exit code $exitCode; see the job log.") } else { @() }
+                }
+            }
+
+            'DeploymentLookup' {
+                $null = Get-VerifiedSite
+                $name = [string]$operation.DeploymentName
+                $found = @(Get-CMSoftwareUpdateDeployment -Name $name -ErrorAction Stop)
+
+                [pscustomobject]@{
+                    success = $true
+                    warnings = $cmWarnings
+                    run_as = $runAs
+                    deployment_name = $name
+                    exists = ($found.Count -gt 0)
+                    deployments = @(
+                        $found | ForEach-Object {
+                            [pscustomobject]@{
+                                assignment_id = [string]$_.AssignmentID
+                                name = [string]$_.AssignmentName
+                                collection_id = [string]$_.TargetCollectionID
+                                start_time = [string]$_.StartTime
+                                deadline = [string]$_.EnforcementDeadline
+                                enabled = [bool]$_.Enabled
+                            }
+                        }
+                    )
+                }
+            }
+
+            default {
+                throw "Unsupported operation."
+            }
+        }
+"""
+
+# Runs inside the DSLAB jumphost session. Self-contained (nothing needs to be
+# installed there). Servers are reached with the DSLAB account passed in
+# explicitly, so no credential delegation (double hop) is needed. Read-only.
+DSLAB_REMOTE_SCRIPT = r"""
+        param($operation, $siteServer, $siteCode, $credential)
+
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        $runAs = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        trap { throw "[$env:COMPUTERNAME as $runAs] $($_.Exception.Message)" }
+        Write-Host "Connected to $env:COMPUTERNAME ($env:USERDNSDOMAIN) as $runAs"
+
+        if ($operation.Kind -eq 'DslabConnectionTest') {
+            return [pscustomobject]@{
+                success = $true
+                host = $env:COMPUTERNAME
+                domain = $env:USERDNSDOMAIN
+                run_as = $runAs
+                powershell = $PSVersionTable.PSVersion.ToString()
+                active_directory_module = [bool](Get-Module -ListAvailable ActiveDirectory)
+                sccm_console = [bool](Test-Path (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Configuration Manager\AdminConsole\bin'))
+            }
+        }
+
+        if ($operation.Kind -ne 'DslabValidateServers') { throw 'Unsupported operation.' }
+
+        $kbs = @($operation.Kb | Where-Object { $_ } | ForEach-Object { ($_ -replace '^KB', '') })
+
+        # Collected on each server; dates as UTC text so they survive JSON.
+        $collect = {
+            param($kbs)
+            $os = Get-CimInstance Win32_OperatingSystem
+            $ubr = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue).UBR
+            $hotfixes = @(Get-HotFix -ErrorAction SilentlyContinue | Sort-Object InstalledOn -Descending)
+            $ccm = @()
+            try { $ccm = @(Get-CimInstance -Namespace 'root\ccm\SoftwareUpdates\UpdatesStore' -ClassName CCM_UpdateStatus -ErrorAction Stop) } catch { }
+            $rebootPending = $null
+            try {
+                $r = Invoke-CimMethod -Namespace 'root\ccm\ClientSDK' -ClassName CCM_ClientUtilities -MethodName DetermineIfRebootPending -ErrorAction Stop
+                $rebootPending = [bool]($r.RebootPending -or $r.IsHardRebootPending)
+            } catch {
+                $rebootPending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
+                    (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
+            }
+            $clientVersion = $null
+            try { $clientVersion = (Get-CimInstance -Namespace 'root\ccm' -ClassName SMS_Client -ErrorAction Stop).ClientVersion } catch { }
+            $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+
+            [pscustomobject]@{
+                logged_on_as = $identity.Name
+                local_admin = ([Security.Principal.WindowsPrincipal]$identity).IsInRole('Administrators')
+                last_boot_utc = $os.LastBootUpTime.ToUniversalTime().ToString('o')
+                uptime_days = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalDays, 1)
+                os = [string]$os.Caption
+                build = "$($os.Version).$ubr"
+                free_c_gb = [math]::Round($disk.FreeSpace / 1GB, 1)
+                reboot_pending = $rebootPending
+                sccm_client_version = $clientVersion
+                sccm_client_service = [string](Get-Service CcmExec -ErrorAction SilentlyContinue).Status
+                recent_hotfixes = @($hotfixes | Select-Object -First 10 | ForEach-Object {
+                    [pscustomobject]@{ kb = [string]$_.HotFixID; installed_on = if ($_.InstalledOn) { $_.InstalledOn.ToString('yyyy-MM-dd') } else { $null } }
+                })
+                missing_updates = @($ccm | Where-Object { $_.Status -eq 'Missing' } | ForEach-Object { "KB$($_.Article)" } | Sort-Object -Unique)
+                kbs = @(foreach ($kb in $kbs) {
+                    $inHotfix = @($hotfixes | Where-Object { $_.HotFixID -eq "KB$kb" }).Count -gt 0
+                    $client = @($ccm | Where-Object { $_.Article -eq $kb } | Select-Object -First 1)
+                    $clientStatus = if ($client.Count) { [string]$client[0].Status } else { $null }
+                    [pscustomobject]@{
+                        kb = "KB$kb"
+                        installed = ($inHotfix -or $clientStatus -eq 'Installed')
+                        in_get_hotfix = $inHotfix
+                        sccm_client_status = $clientStatus
+                    }
+                })
+            }
+        }
+
+        $results = foreach ($server in @($operation.Servers)) {
+            Write-Host ''
+            Write-Host "== $server"
+            $r = [ordered]@{
+                server = $server; dns = $null; ip = @(); ping = $false; winrm = $false; remote_access = $null
+                eligible = $false; details = $null
+            }
+
+            try {
+                $r.ip = @([Net.Dns]::GetHostAddresses($server) |
+                    Where-Object { $_.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork } |
+                    ForEach-Object { $_.IPAddressToString })
+                $r.dns = 'OK'
+            } catch { $r.dns = "FAILED: $($_.Exception.Message)" }
+            Write-Host "  DNS:    $($r.dns) $($r.ip -join ', ')"
+
+            $r.ping = [bool](Test-Connection -ComputerName $server -Count 2 -Quiet -ErrorAction SilentlyContinue)
+            Write-Host "  Ping:   $(if ($r.ping) { 'Succeeded' } else { 'Request Timeout' })"
+
+            try { Test-WSMan -ComputerName $server -ErrorAction Stop | Out-Null; $r.winrm = $true } catch { }
+            Write-Host "  WinRM:  $(if ($r.winrm) { 'listening' } else { 'not reachable' })"
+
+            if ($r.winrm) {
+                try {
+                    $d = Invoke-Command -ComputerName $server -Credential $credential -ErrorAction Stop -ArgumentList (, $kbs) -ScriptBlock $collect
+                    $r.details = $d | Select-Object -Property * -ExcludeProperty PSComputerName, RunspaceId, PSShowComputerName
+                    $r.remote_access = 'OK'
+                    Write-Host "  Logon:  OK as $($d.logged_on_as) (local admin: $($d.local_admin))"
+                    Write-Host "  OS:     $($d.os) build $($d.build); last boot $($d.last_boot_utc) ($($d.uptime_days) days)"
+                    Write-Host "  Disk:   C: $($d.free_c_gb) GB free; reboot pending: $($d.reboot_pending)"
+                    Write-Host "  SCCM:   client $($d.sccm_client_version) ($($d.sccm_client_service)); missing updates: $(if (@($d.missing_updates).Count) { @($d.missing_updates) -join ', ' } else { 'none' })"
+                    Write-Host "  Latest: $((@($d.recent_hotfixes) | Select-Object -First 3 | ForEach-Object { "$($_.kb) ($($_.installed_on))" }) -join ', ')"
+                    foreach ($k in @($d.kbs)) { Write-Host "  $($k.kb): $(if ($k.installed) { 'INSTALLED' } else { 'NOT INSTALLED' }) (Get-HotFix: $($k.in_get_hotfix); SCCM client: $($k.sccm_client_status))" }
+                } catch {
+                    $r.remote_access = "FAILED: $($_.Exception.Message)"
+                    Write-Host "  Logon:  $($r.remote_access)"
+                }
+            } else {
+                $r.remote_access = 'FAILED: WinRM not reachable'
+            }
+
+            # SOP step 6: patch candidate if ping succeeded, or ping failed but the server answered remotely.
+            $r.eligible = $r.ping -or $r.remote_access -eq 'OK'
+            Write-Host "  Result: $(if ($r.eligible) { 'ELIGIBLE' } else { 'NOT ELIGIBLE - check in vCenter (powered on / off / missing)' })"
+            [pscustomobject]$r
+        }
+
+        $results = @($results)
+        [pscustomobject]@{
+            success = $true
+            host = $env:COMPUTERNAME
+            run_as = $runAs
+            servers = $results
+            summary = [pscustomobject]@{
+                total = $results.Count
+                eligible = @($results | Where-Object { $_.eligible }).Count
+                remote_access_ok = @($results | Where-Object { $_.remote_access -eq 'OK' }).Count
+                reboot_pending = @($results | Where-Object { $_.details -and $_.details.reboot_pending }).Count
+            }
+        }
+"""
+
+# The wrapper is too long for the 32,767-character Windows command line once
+# encoded, so it travels in an environment variable and the command line only
+# carries this short loader. Script blocks are not subject to execution policy.
+ENCODED_LOADER = base64.b64encode(
+    "& ([scriptblock]::Create($env:SCCM_WRAPPER))".encode("utf-16le")
+).decode("ascii")
+
+
+CLIXML_MESSAGE = re.compile(r'<S S="(Error|warning)">(.*?)</S>', re.DOTALL)
+
+
+def clixml_messages(text: str) -> list:
+    """Warning and error lines from PowerShell's CLIXML stderr output."""
+    messages = []
+    for kind, body in CLIXML_MESSAGE.findall(text or ""):
+        body = html.unescape(body).replace("_x000D_", "").replace("_x000A_", "\n").strip()
+        for line in body.splitlines():
+            if line.strip():
+                messages.append(f"{'ERROR' if kind == 'Error' else 'WARNING'}: {line.strip()}")
+    return messages
+
+
+def run_powershell(operation: dict, timeout: int, on_line=None, target: str = "sccm") -> dict:
+    """
+    Run one fixed operation on a jumphost through a local PowerShell process
+    that opens a remoting session: target "sccm" (SCCM jumphost, RunAs
+    endpoint, Kerberos) or "dslab" (DSLAB jumphost, DSLAB account).
+
+    The operation travels as JSON in an environment variable, so request
+    data is never spliced into script text. Every output line is passed to
+    on_line as it arrives; the result is the JSON line after RESULT_MARKER.
+    Raises subprocess.TimeoutExpired on timeout.
+    """
+
+    env = os.environ.copy()
+    env["SCCM_SITE_SERVER"] = SITE_SERVER
+    env["SCCM_SITE_CODE"] = SITE_CODE
+    if target == "dslab":
+        env["SCCM_JUMPHOST"] = DSLAB_JUMPHOST
+        env["SCCM_SESSION_CONFIG"] = DSLAB_SESSION_CONFIG
+        env["SCCM_SESSION_AUTH"] = DSLAB_AUTH
+        env["SCCM_USERNAME"] = DSLAB_USERNAME
+        env["SCCM_PASSWORD"] = DSLAB_PASSWORD
+        # The same DSLAB account connects from the jumphost to the servers.
+        env["SCCM_TARGET_USERNAME"] = DSLAB_USERNAME
+        env["SCCM_TARGET_PASSWORD"] = DSLAB_PASSWORD
+        env["SCCM_REMOTE_SCRIPT"] = DSLAB_REMOTE_SCRIPT
+    else:
+        env["SCCM_JUMPHOST"] = JUMPHOST
+        env["SCCM_SESSION_CONFIG"] = SESSION_CONFIG
+        env["SCCM_SESSION_AUTH"] = "Kerberos"
+        env["SCCM_USERNAME"] = USERNAME
+        env["SCCM_PASSWORD"] = PASSWORD
+        env["SCCM_TARGET_USERNAME"] = TARGET_USERNAME
+        env["SCCM_TARGET_PASSWORD"] = TARGET_PASSWORD
+        env["SCCM_REMOTE_SCRIPT"] = REMOTE_SCRIPT
+    env["SCCM_OPERATION"] = json.dumps(operation, separators=(",", ":"))
+    env["SCCM_WRAPPER"] = POWERSHELL_WRAPPER
+
+    process = subprocess.Popen(
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            ENCODED_LOADER,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+        bufsize=1,
+    )
+
+    timed_out = threading.Event()
+
+    def stop():
+        timed_out.set()
+        process.kill()
+
+    timer = threading.Timer(timeout, stop)
+    timer.daemon = True
+    timer.start()
+
+    # stderr carries PowerShell's serialized (CLIXML) streams; read it on the
+    # side so the pipe never fills, and keep only warnings and errors.
+    stderr_chunks = []
+    stderr_reader = threading.Thread(target=lambda: stderr_chunks.append(process.stderr.read()), daemon=True)
+    stderr_reader.start()
+
+    result_text = None
+    tail = deque(maxlen=50)
+    try:
+        for raw in process.stdout:
+            line = raw.rstrip("\r\n")
+            if line.startswith(RESULT_MARKER):
+                result_text = line[len(RESULT_MARKER):]
+                continue
+            tail.append(line)
+            if on_line:
+                on_line(line)
+        process.wait()
+        stderr_reader.join(timeout=10)
+    finally:
+        timer.cancel()
+
+    for message in clixml_messages("".join(stderr_chunks)):
+        tail.append(message)
+        if on_line:
+            on_line(message)
+
+    if timed_out.is_set():
+        raise subprocess.TimeoutExpired(process.args, timeout)
+
+    if result_text is None:
+        last_lines = [line for line in tail if line.strip()][-10:]
+        return {
+            "success": False,
+            "errors": [
+                "\n".join(last_lines)
+                or f"PowerShell exited with code {process.returncode} without a result."
+            ],
+        }
+
+    try:
+        result = json.loads(result_text)
+    except json.JSONDecodeError:
+        return {"success": False, "errors": ["PowerShell did not return valid JSON."]}
+
+    if isinstance(result, list):
+        result = next((item for item in reversed(result) if isinstance(item, dict)), None)
+    if not isinstance(result, dict):
+        return {"success": False, "errors": ["PowerShell returned no result object."]}
+
+    result["powershell_exit_code"] = process.returncode
+    return result
+
+
+# ============================================================
+# JOB STORE (SQLite), LOGS AND RUNNER
+# ============================================================
+
+# QUEUED -> RUNNING -> SUCCEEDED | COMPLETED_WITH_ISSUES | FAILED | OUTCOME_UNKNOWN
+#   COMPLETED_WITH_ISSUES  deployment ran; not every server is PATCHED
+#   OUTCOME_UNKNOWN        deployment jobs only: the run was cut off after the
+#                          deployment may have been created; resume or check SCCM.
+ACTIVE_STATUSES = ("QUEUED", "RUNNING")
+
+DB_LOCK = Lock()
+LOG_LOCK = Lock()
+LOG_SEQ = {}
+
+# SCCM reads run one at a time; deployments (hours) run on their own worker
+# so checks and inventory keep working meanwhile.
+READ_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sccm-read")
+DEPLOY_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sccm-deploy")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso(value: datetime) -> str:
+    return value.isoformat(timespec="seconds")
+
+
+def db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    with DB_LOCK, closing(db()) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                idempotency_key TEXT UNIQUE,
+                result_json TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS job_logs (
+                job_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                ts TEXT NOT NULL,
+                line TEXT NOT NULL,
+                PRIMARY KEY (job_id, seq)
+            )
+            """
+        )
+
+        # Jobs cut off by an API restart cannot be continued in place. A
+        # deployment run may already have created the deployment: resume it.
+        now = iso(utc_now())
+        interrupted = json.dumps({
+            "success": False,
+            "errors": ["The API stopped before this job finished."],
+            "next_step": "Deployment runs: POST /api/sccm/deployments/resume, or check SCCM first.",
+        })
+        conn.execute(
+            "UPDATE jobs SET status = 'OUTCOME_UNKNOWN', finished_at = ?, result_json = ? "
+            "WHERE status = 'RUNNING' AND kind IN ('deployment', 'deployment_resume')",
+            (now, interrupted),
+        )
+        conn.execute(
+            "UPDATE jobs SET status = 'FAILED', finished_at = ?, result_json = ? "
+            "WHERE status IN ('QUEUED', 'RUNNING')",
+            (now, interrupted),
+        )
+        conn.commit()
+
+
+def get_job(job_id: str) -> Optional[sqlite3.Row]:
+    with closing(db()) as conn:
+        return conn.execute(
+            "SELECT * FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+
+
+def append_log(job_id: str, line: str):
+    with LOG_LOCK:
+        seq = LOG_SEQ.get(job_id, -1) + 1
+        LOG_SEQ[job_id] = seq
+    with DB_LOCK, closing(db()) as conn:
+        conn.execute(
+            "INSERT INTO job_logs (job_id, seq, ts, line) VALUES (?, ?, ?, ?)",
+            (job_id, seq, iso(utc_now()), line),
+        )
+        conn.commit()
+
+
+def last_log_seq(job_id: str) -> int:
+    with closing(db()) as conn:
+        row = conn.execute(
+            "SELECT MAX(seq) AS seq FROM job_logs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+    return -1 if row["seq"] is None else int(row["seq"])
+
+
+def get_logs(job_id: str, after: int, limit: int = MAX_LOG_LINES_PER_RESPONSE) -> list:
+    with closing(db()) as conn:
+        rows = conn.execute(
+            "SELECT seq, ts, line FROM job_logs WHERE job_id = ? AND seq > ? "
+            "ORDER BY seq LIMIT ?",
+            (job_id, after, limit),
+        ).fetchall()
+    return [{"seq": row["seq"], "time": row["ts"], "line": row["line"]} for row in rows]
+
+
+def job_view(row: sqlite3.Row) -> dict:
+    view = {
+        "job_id": row["id"],
+        "kind": row["kind"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "request": json.loads(row["request_json"]),
+        "poll_url": f"/api/jobs/{row['id']}",
+        "log_lines": last_log_seq(row["id"]) + 1,
+    }
+    if row["result_json"]:
+        view["result"] = json.loads(row["result_json"])
+    return view
+
+
+def update_job(job_id: str, **fields):
+    columns = ", ".join(f"{name} = ?" for name in fields)
+    with DB_LOCK, closing(db()) as conn:
+        conn.execute(
+            f"UPDATE jobs SET {columns} WHERE id = ?",
+            (*fields.values(), job_id),
+        )
+        conn.commit()
+
+
+def submit_job(kind: str, operation: dict, idempotency_key: str = "") -> dict:
+    """
+    Store a job and queue it. Reusing an idempotency key with the same
+    request returns the existing job; with a different request it is a 409.
+    """
+
+    request_json = json.dumps(operation, sort_keys=True, separators=(",", ":"))
+    request_hash = hashlib.sha256(
+        f"{kind}|{request_json}".encode("utf-8")
+    ).hexdigest()
+    key = idempotency_key.strip() or None
+
+    with DB_LOCK, closing(db()) as conn:
+        if key:
+            existing = conn.execute(
+                "SELECT * FROM jobs WHERE idempotency_key = ?", (key,)
+            ).fetchone()
+            if existing:
+                if existing["request_hash"] != request_hash:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Idempotency-Key was already used for a different request.",
+                    )
+                return job_view(existing)
+
+        job_id = secrets.token_urlsafe(12)
+        conn.execute(
+            "INSERT INTO jobs (id, kind, status, request_json, request_hash, "
+            "idempotency_key, created_at) VALUES (?, ?, 'QUEUED', ?, ?, ?, ?)",
+            (job_id, kind, request_json, request_hash, key, iso(utc_now())),
+        )
+        conn.commit()
+
+    executor = DEPLOY_EXECUTOR if kind in DEPLOY_KINDS else READ_EXECUTOR
+    executor.submit(run_job, job_id, kind, operation)
+    return job_view(get_job(job_id))
+
+
+NEXT_STEPS = {
+    "inventory": (
+        "Pick one entry from 'sugs' and one from 'collections' (or a new collection "
+        "name), then POST /api/sccm/dry-run/continue or /api/sccm/deployments "
+        "with run_id '{job_id}'."
+    ),
+    "dry_run": (
+        "Review targets and updates. When approved, POST /api/sccm/deployments "
+        "with the same run_id, SUG and collection."
+    ),
+}
+
+
+def deployment_status(result: dict) -> str:
+    """Final status of a deployment job from the script's result."""
+    if result.get("success"):
+        return "SUCCEEDED"
+    if result.get("exit_code") == 1:
+        return "COMPLETED_WITH_ISSUES"
+    errors = " ".join(str(error) for error in result.get("errors", []))
+    if "No deployment created." in errors or (
+        "exit_code" in result and not result.get("deployment_created")
+    ):
+        return "FAILED"
+    return "OUTCOME_UNKNOWN"
+
+
+def run_job(job_id: str, kind: str, operation: dict):
+    update_job(job_id, status="RUNNING", started_at=iso(utc_now()))
+    started = utc_now()
+    append_log(job_id, f"Job {job_id} ({kind}) started on the API at {iso(started)}.")
+
+    def on_line(line: str):
+        try:
+            append_log(job_id, line)
+        except Exception:
+            pass  # a log write must never stop the job
+
+    try:
+        result = run_powershell(
+            operation, timeout=JOB_TIMEOUTS[kind], on_line=on_line,
+            target="dslab" if kind.startswith("dslab_") else "sccm",
+        )
+    except subprocess.TimeoutExpired:
+        result = {
+            "success": False,
+            "errors": [f"Timed out after {JOB_TIMEOUTS[kind]} seconds."],
+        }
+    except Exception as exc:  # keep the worker alive for the next job
+        result = {"success": False, "errors": [f"{type(exc).__name__}: {exc}"]}
+
+    if kind in DEPLOY_KINDS:
+        status = deployment_status(result)
+        if status == "OUTCOME_UNKNOWN":
+            result["next_step"] = (
+                "The run was cut off after the deployment may have been created. "
+                "POST /api/sccm/deployments/resume to continue it, or check SCCM "
+                "with POST /api/sccm/deployments/lookup."
+            )
+        elif status == "COMPLETED_WITH_ISSUES":
+            result["next_step"] = (
+                "Check 'servers' and 'validation' for servers not PATCHED; "
+                "fix and POST /api/sccm/deployments/resume, or validate later."
+            )
+    elif result.get("success"):
+        status = "SUCCEEDED"
+        if kind in NEXT_STEPS:
+            result["next_step"] = NEXT_STEPS[kind].format(job_id=job_id)
+    else:
+        status = "FAILED"
+
+    result["duration_seconds"] = round((utc_now() - started).total_seconds(), 2)
+    append_log(job_id, f"Job finished with status {status} after {result['duration_seconds']} s.")
+    update_job(
+        job_id,
+        status=status,
+        finished_at=iso(utc_now()),
+        result_json=json.dumps(result),
+    )
+    with LOG_LOCK:
+        LOG_SEQ.pop(job_id, None)
+
+
+def require_succeeded_job(job_id: str, kind: str, label: str) -> dict:
+    """Return a finished, recent job's view, or raise a 4xx explaining why not."""
+
+    row = get_job(job_id)
+    if not row or row["kind"] != kind:
+        raise HTTPException(status_code=404, detail=f"{label} job not found.")
+    if row["status"] != "SUCCEEDED":
+        raise HTTPException(
+            status_code=409,
+            detail=f"{label} job is {row['status']}; it must be SUCCEEDED.",
+        )
+    finished = datetime.fromisoformat(row["finished_at"])
+    if utc_now() - finished > RESULT_MAX_AGE:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{label} job is older than {RESULT_MAX_AGE}; run it again.",
+        )
+    return job_view(row)
+
+
+def running_deployment() -> Optional[str]:
+    with closing(db()) as conn:
+        row = conn.execute(
+            "SELECT id FROM jobs WHERE status IN ('QUEUED', 'RUNNING') "
+            "AND kind IN ('deployment', 'deployment_resume') ORDER BY created_at LIMIT 1"
+        ).fetchone()
+    return row["id"] if row else None
+
+
+init_db()
+
+
+# ============================================================
+# AUTHENTICATION / REQUEST MODELS
+# ============================================================
+
+def authorize(x_api_key: str):
+    if not hmac.compare_digest(x_api_key or "", API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+class DryRunContinueRequest(BaseModel):
+    """Select by ID or by exact name from the dry-run/start result."""
+    run_id: str = Field(min_length=1, max_length=64)
+    sug_id: Optional[str] = Field(default=None, max_length=30)
+    sug_name: Optional[str] = Field(default=None, max_length=300)
+    collection_id: Optional[str] = Field(default=None, max_length=30)
+    collection_name: Optional[str] = Field(default=None, max_length=300)
+
+
+def as_list(value) -> list:
+    """PowerShell JSON can hold a one-item list as a bare object."""
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def pick_from_inventory(items, item_id: Optional[str],
+                        item_name: Optional[str], label: str) -> dict:
+    """Resolve one inventory entry by ID, or by case-insensitive exact name."""
+
+    items = as_list(items)
+    item_id = (item_id or "").strip()
+    item_name = (item_name or "").strip()
+    if bool(item_id) == bool(item_name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Give exactly one of {label}_id or {label}_name.",
+        )
+
+    if item_id:
+        matches = [item for item in items if str(item["id"]) == item_id]
+    else:
+        matches = [
+            item for item in items
+            if str(item["name"]).casefold() == item_name.casefold()
+        ]
+
+    if not matches:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label} '{item_id or item_name}' is not in the dry-run/start result.",
+        )
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"More than one {label} is named '{item_name}'; use {label}_id.",
+        )
+    return matches[0]
+
+
+class DeploymentRequest(BaseModel):
+    """
+    Required deployment run end to end by 04-DeployAndValidatePatches.ps1.
+    SUG and collection are picked from the dry-run/start (run_id) lists;
+    give new_collection_name instead to have the collection created with the
+    allowlisted servers.
+    """
+    run_id: str = Field(min_length=1, max_length=64)
+    sug_id: Optional[str] = Field(default=None, max_length=30)
+    sug_name: Optional[str] = Field(default=None, max_length=300)
+    collection_id: Optional[str] = Field(default=None, max_length=30)
+    collection_name: Optional[str] = Field(default=None, max_length=300)
+    new_collection_name: Optional[str] = Field(default=None, min_length=3, max_length=100)
+    limiting_collection_name: Optional[str] = Field(default=None, max_length=300)
+    deployment_name: str = Field(min_length=3, max_length=100)
+    maintenance_window_start_utc: datetime
+    maintenance_window_hours: int = Field(default=4, ge=1, le=24)
+    restart_mode: str = Field(default="Script")
+    kb: Optional[List[str]] = None
+    change_ticket: str = Field(min_length=3, max_length=100)
+    approver: str = Field(min_length=2, max_length=100)
+    approval_reference: str = Field(min_length=2, max_length=200)
+    readiness_confirmed: bool
+    final_confirmation: str = Field(min_length=1, max_length=100)
+
+
+class DeploymentResumeRequest(BaseModel):
+    """Continue a deployment run that was cut off (window closed, API restarted)."""
+    report_folder: Optional[str] = Field(default=None, max_length=40)
+    restart_mode: Optional[str] = None
+
+
+class DeploymentLookupRequest(BaseModel):
+    deployment_name: str = Field(min_length=1, max_length=200)
+
+
+class DslabValidateRequest(BaseModel):
+    """Servers to check from the DSLAB jumphost (short names get the DSLAB domain)."""
+    servers: Optional[List[str]] = None
+    kb: Optional[List[str]] = None
+
+
+SERVER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}(\.[A-Za-z0-9][A-Za-z0-9-]{0,62})*$")
+MAX_DSLAB_SERVERS = 50
+
+
+def require_dslab():
+    if not DSLAB_PASSWORD:
+        raise HTTPException(
+            status_code=503,
+            detail="DSLAB jumphost account not configured. Restart the API and enter the password "
+                   f"for {DSLAB_USERNAME} (or set SCCM_DSLAB_PASSWORD).",
+        )
+
+
+RESTART_MODES = {"script": "Script", "sccm": "Sccm", "none": "None"}
+KB_PATTERN = re.compile(r"^(KB)?\d{6,8}$", re.IGNORECASE)
+REPORT_FOLDER_PATTERN = re.compile(r"^\d{8}_\d{6}Z$")
+SAFE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9 _.\-()]+$")
+
+
+def restart_mode_value(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    mode = RESTART_MODES.get(value.strip().lower())
+    if not mode:
+        raise HTTPException(status_code=400, detail="restart_mode must be Script, Sccm or None.")
+    return mode
+
+
+# ============================================================
+# API ENDPOINTS
+# ============================================================
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "deployment_enabled": ALLOW_DEPLOYMENT,
+        "target_server_account": TARGET_USERNAME or None,
+        "running_deployment_job": running_deployment(),
+        "dslab_jumphost": DSLAB_JUMPHOST if DSLAB_PASSWORD else None,
+    }
+
+
+@app.get("/api/jobs/{job_id}")
+def get_job_status(
+    job_id: str,
+    wait: int = 0,
+    log_after: Optional[int] = None,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+):
+    """
+    Job status and, once finished, its result.
+
+    ?wait=N (max 120): hold the request until the job finishes, or - when
+    log_after is given - until new log lines arrive, for up to N seconds.
+    ?log_after=M: include log lines with seq > M (use -1 for the first call,
+    then the returned log_next).
+    """
+    authorize(x_api_key)
+    row = get_job(job_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    stop_at = time.monotonic() + max(0, min(wait, MAX_POLL_WAIT_SECONDS))
+    while row["status"] in ACTIVE_STATUSES and time.monotonic() < stop_at:
+        if log_after is not None and last_log_seq(job_id) > log_after:
+            break
+        time.sleep(1)
+        row = get_job(job_id)
+
+    view = job_view(row)
+    if log_after is not None:
+        lines = get_logs(job_id, log_after)
+        view["log"] = lines
+        view["log_next"] = lines[-1]["seq"] if lines else log_after
+        view["log_more"] = view["log_next"] < view["log_lines"] - 1
+    return view
+
+
+@app.get("/api/jobs/{job_id}/log")
+def get_job_log(
+    job_id: str,
+    after: int = -1,
+    limit: int = MAX_LOG_LINES_PER_RESPONSE,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+):
+    """Log lines of a job (seq > after), e.g. to load or download the full log."""
+    authorize(x_api_key)
+    if not get_job(job_id):
+        raise HTTPException(status_code=404, detail="Job not found.")
+    lines = get_logs(job_id, after, max(1, min(limit, 5000)))
+    return {
+        "job_id": job_id,
+        "log": lines,
+        "log_next": lines[-1]["seq"] if lines else after,
+        "log_lines": last_log_seq(job_id) + 1,
+    }
+
+
+@app.get("/api/jobs")
+def list_jobs(
+    limit: int = 20,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+):
+    authorize(x_api_key)
+    limit = max(1, min(limit, 200))
+    with closing(db()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+    jobs = []
+    for row in rows:
+        view = job_view(row)
+        view.pop("result", None)
+        jobs.append(view)
+    return {"jobs": jobs}
+
+
+@app.post("/api/sccm/connection-test", status_code=202)
+def connection_test(
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+):
+    """Which account the jumphost session runs as, and what it can reach."""
+    authorize(x_api_key)
+    return submit_job("connection_test", {
+        "Kind": "ConnectionTest",
+        "ProjectRoot": PROJECT_ROOT,
+    })
+
+
+@app.post("/api/sccm/environment-check", status_code=202)
+def environment_check(
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+):
+    authorize(x_api_key)
+    return submit_job("environment", {
+        "Kind": "RunFixedScript",
+        "Path": os.path.join(PROJECT_ROOT, "Scripts", SCRIPTS["environment"]),
+    }, idempotency_key)
+
+
+@app.post("/api/sccm/prerequisites", status_code=202)
+def prerequisites(
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+):
+    authorize(x_api_key)
+    return submit_job("prerequisites", {
+        "Kind": "RunFixedScript",
+        "Path": os.path.join(PROJECT_ROOT, "Scripts", SCRIPTS["prerequisites"]),
+    }, idempotency_key)
+
+
+@app.post("/api/sccm/dry-run/start", status_code=202)
+@app.post("/api/sccm/inventory", status_code=202, include_in_schema=False)
+def start_dry_run(
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+):
+    """
+    Lists SUGs and device collections. The returned job_id is the run_id for
+    dry-run/continue and for deployments.
+    """
+    authorize(x_api_key)
+    return submit_job("inventory", {"Kind": "Inventory"}, idempotency_key)
+
+
+@app.post("/api/sccm/dry-run/continue", status_code=202)
+def continue_dry_run(
+    request: DryRunContinueRequest,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+):
+    """
+    Dry run, part 2: read-only validation of the SUG and collection picked
+    from the part 1 result. Nothing is created in SCCM.
+    """
+    authorize(x_api_key)
+
+    inventory = require_succeeded_job(
+        request.run_id, "inventory", "dry-run/start"
+    )["result"]
+
+    sug = pick_from_inventory(
+        inventory.get("sugs"), request.sug_id, request.sug_name, "sug"
+    )
+    collection = pick_from_inventory(
+        inventory.get("collections"),
+        request.collection_id, request.collection_name, "collection",
+    )
+
+    return submit_job("dry_run", {
+        "Kind": "DryRun",
+        "SugId": str(sug["id"]),
+        "CollectionId": str(collection["id"]),
+        "AllowedTargets": sorted(ALLOWED_TARGETS),
+    }, idempotency_key)
+
+
+@app.post("/api/sccm/deployments", status_code=202)
+@app.post("/api/sccm/deployments/start", status_code=202, include_in_schema=False)
+def start_deployment(
+    request: DeploymentRequest,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+):
+    """
+    Runs the full patching flow on the jumphost with 04-DeployAndValidatePatches.ps1:
+    collection (created if new), content distribution, maintenance window,
+    Required deployment with SOP settings, install monitoring, restart and KB
+    validation. Servers already compliant are skipped. Poll the job with
+    log_after to show the live log.
+    """
+    authorize(x_api_key)
+
+    if not ALLOW_DEPLOYMENT:
+        raise HTTPException(
+            status_code=403,
+            detail="Deployment is disabled. Set SCCM_ALLOW_DEPLOYMENT=true "
+                   "only after the SCCM administrator approves writes.",
+        )
+    if not idempotency_key.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Idempotency-Key header is required for deployments.",
+        )
+    if not request.readiness_confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="readiness_confirmed must be true: DP content, client "
+                   "health, maintenance window and approvals checked.",
+        )
+
+    deployment_name = request.deployment_name.strip()
+    if request.final_confirmation != deployment_name:
+        raise HTTPException(
+            status_code=400,
+            detail="final_confirmation must exactly match deployment_name.",
+        )
+    if not SAFE_NAME_PATTERN.match(deployment_name):
+        raise HTTPException(
+            status_code=400,
+            detail="deployment_name may contain letters, digits, spaces and _ . - ( ) only.",
+        )
+
+    running = running_deployment()
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Deployment job {running} is still running; wait for it to finish.",
+        )
+
+    inventory = require_succeeded_job(request.run_id, "inventory", "dry-run/start")["result"]
+    sug = pick_from_inventory(inventory.get("sugs"), request.sug_id, request.sug_name, "sug")
+
+    new_name = (request.new_collection_name or "").strip()
+    if new_name:
+        if request.collection_id or request.collection_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Give either collection_id / collection_name (existing) or new_collection_name, not both.",
+            )
+        if not SAFE_NAME_PATTERN.match(new_name):
+            raise HTTPException(
+                status_code=400,
+                detail="new_collection_name may contain letters, digits, spaces and _ . - ( ) only.",
+            )
+        if any(str(item["name"]).casefold() == new_name.casefold()
+               for item in as_list(inventory.get("collections"))):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Collection '{new_name}' already exists; select it with collection_id or collection_name.",
+            )
+        collection_name, collection_id = new_name, None
+    else:
+        collection = pick_from_inventory(
+            inventory.get("collections"), request.collection_id, request.collection_name, "collection"
+        )
+        collection_name, collection_id = str(collection["name"]), str(collection["id"])
+
+    start = request.maintenance_window_start_utc
+    if start.tzinfo is None:
+        raise HTTPException(
+            status_code=400,
+            detail="maintenance_window_start_utc must include a time zone, e.g. 2026-10-20T06:00:00Z.",
+        )
+    start = start.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    end = start + timedelta(hours=request.maintenance_window_hours)
+    if end < utc_now() + MIN_WINDOW_REMAINING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The maintenance window must still be open at least {MIN_WINDOW_REMAINING} from now.",
+        )
+    if start > utc_now() + MAX_WINDOW_START_AHEAD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"maintenance_window_start_utc must be within {MAX_WINDOW_START_AHEAD.days} days.",
+        )
+
+    kbs = []
+    for kb in request.kb or []:
+        kb = kb.strip()
+        if not KB_PATTERN.match(kb):
+            raise HTTPException(status_code=400, detail=f"'{kb}' is not a KB number (e.g. KB5087545).")
+        kbs.append(kb.upper() if kb.upper().startswith("KB") else f"KB{kb}")
+
+    return submit_job("deployment", {
+        "Kind": "RunDeployment",
+        "ProjectRoot": PROJECT_ROOT,
+        "SugId": str(sug["id"]),
+        "SugName": str(sug["name"]),
+        "CollectionId": collection_id,
+        "CollectionName": collection_name,
+        "NewCollection": bool(new_name),
+        "LimitingCollectionName": (request.limiting_collection_name or "").strip() or None,
+        "DeploymentName": deployment_name,
+        "MaintenanceWindowStartUtc": start.strftime("%Y-%m-%d %H:%M"),
+        "MaintenanceWindowHours": request.maintenance_window_hours,
+        "RestartMode": restart_mode_value(request.restart_mode),
+        "Kb": kbs,
+        "ChangeTicket": request.change_ticket.strip(),
+        "Approver": request.approver.strip(),
+        "ApprovalReference": request.approval_reference.strip(),
+    }, idempotency_key)
+
+
+@app.post("/api/sccm/deployments/resume", status_code=202)
+def resume_deployment(
+    request: DeploymentResumeRequest,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+):
+    """
+    Continues the last deployment run on the jumphost (or report_folder, e.g.
+    '20261019_023200Z' from result.report_folder_name): reuses its collection,
+    window and deployment, keeps its baseline, and carries on with
+    monitoring, restart and validation.
+    """
+    authorize(x_api_key)
+    if not ALLOW_DEPLOYMENT:
+        raise HTTPException(status_code=403, detail="Deployment is disabled (SCCM_ALLOW_DEPLOYMENT).")
+    running = running_deployment()
+    if running:
+        raise HTTPException(status_code=409, detail=f"Deployment job {running} is still running.")
+
+    folder = (request.report_folder or "").strip() or None
+    if folder and not REPORT_FOLDER_PATTERN.match(folder):
+        raise HTTPException(status_code=400, detail="report_folder must look like 20261019_023200Z.")
+
+    return submit_job("deployment_resume", {
+        "Kind": "RunDeployment",
+        "ProjectRoot": PROJECT_ROOT,
+        "Resume": True,
+        "ReportFolder": folder,
+        "RestartMode": restart_mode_value(request.restart_mode),
+        "RequestedAt": iso(utc_now()),
+    }, idempotency_key)
+
+
+@app.post("/api/dslab/connection-test", status_code=202)
+def dslab_connection_test(
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+):
+    """Can the API reach the DSLAB jumphost with the DSLAB account? Read-only."""
+    authorize(x_api_key)
+    require_dslab()
+    return submit_job("dslab_connection_test", {
+        "Kind": "DslabConnectionTest",
+        "Jumphost": DSLAB_JUMPHOST,
+        "RequestedAt": iso(utc_now()),
+    })
+
+
+@app.post("/api/dslab/validate-servers", status_code=202)
+def dslab_validate_servers(
+    request: DslabValidateRequest,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+):
+    """
+    From the DSLAB jumphost, checks each server: DNS, ping, WinRM, logon and
+    local admin, OS/build, last boot, free disk, pending reboot, SCCM client,
+    recent and missing updates, and the given KBs. Read-only.
+    Default servers: the allowlisted test servers.
+    """
+    authorize(x_api_key)
+    require_dslab()
+
+    names = request.servers or sorted(ALLOWED_TARGETS)
+    if len(names) > MAX_DSLAB_SERVERS:
+        raise HTTPException(status_code=400, detail=f"At most {MAX_DSLAB_SERVERS} servers per request.")
+    servers = []
+    for name in names:
+        name = name.strip().lower()
+        if not SERVER_NAME_PATTERN.match(name):
+            raise HTTPException(status_code=400, detail=f"'{name}' is not a valid server name.")
+        servers.append(name if "." in name else f"{name}.{DSLAB_DOMAIN}")
+
+    kbs = []
+    for kb in request.kb or []:
+        kb = kb.strip()
+        if not KB_PATTERN.match(kb):
+            raise HTTPException(status_code=400, detail=f"'{kb}' is not a KB number (e.g. KB5087545).")
+        kbs.append(kb.upper() if kb.upper().startswith("KB") else f"KB{kb}")
+
+    return submit_job("dslab_validate", {
+        "Kind": "DslabValidateServers",
+        "Jumphost": DSLAB_JUMPHOST,
+        "Servers": sorted(set(servers)),
+        "Kb": kbs,
+        "RequestedAt": iso(utc_now()),
+    })
+
+
+@app.post("/api/sccm/deployments/lookup", status_code=202)
+def lookup_deployment(
+    request: DeploymentLookupRequest,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+):
+    """Check SCCM for a deployment by name, e.g. after OUTCOME_UNKNOWN."""
+    authorize(x_api_key)
+    return submit_job("deployment_lookup", {
+        "Kind": "DeploymentLookup",
+        "DeploymentName": request.deployment_name.strip(),
+    })

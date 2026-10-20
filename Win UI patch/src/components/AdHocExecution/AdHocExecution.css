@@ -1,0 +1,1087 @@
+/* Ad-Hoc Execution & Observability Engine - CDK theme (all colours from src/index.css tokens) */
+
+.adhoc-root {
+  width: 100%;
+  min-height: 100%;
+  background: var(--bg-base);
+  color: var(--text-main);
+  padding: 1.5rem 2rem 3rem;
+  box-sizing: border-box;
+  font-family: var(--font-sans);
+  animation: adhocFadeIn 0.25s ease-out;
+}
+
+@keyframes adhocFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.adhoc-container {
+  max-width: 1520px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Toast Notification */
+.adhoc-toast {
+  position: fixed;
+  top: 1.5rem;
+  right: 2rem;
+  z-index: 10000;
+  background: var(--success-solid);
+  color: var(--on-accent);
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  animation: toastSlide 0.3s ease-out;
+}
+
+@keyframes toastSlide {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* Header */
+.adhoc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.5rem;
+}
+
+.adhoc-header-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.25rem 0.75rem;
+  background: var(--accent-dim);
+  color: var(--accent-text);
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.adhoc-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: adhocPulse 1.8s infinite ease-in-out;
+}
+
+@keyframes adhocPulse {
+  0% { transform: scale(0.9); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.4; }
+  100% { transform: scale(0.9); opacity: 1; }
+}
+
+.adhoc-title {
+  font-size: 1.65rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0.4rem 0 0.25rem;
+  letter-spacing: -0.02em;
+}
+
+.adhoc-subtitle {
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 800px;
+  line-height: 1.45;
+}
+
+.adhoc-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Header & Tabs */
+.adhoc-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-bottom: 2px solid var(--border-glass);
+  padding-bottom: 0;
+  margin-bottom: 0.5rem;
+}
+
+.adhoc-tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  padding: 0.75rem 1.25rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  transition: color 0.15s ease-in-out, border-color 0.15s ease-in-out;
+  margin-bottom: -2px;
+}
+
+.adhoc-tab-btn:hover {
+  color: var(--text-main);
+}
+
+.adhoc-tab-btn.active {
+  color: var(--accent-text);
+  border-bottom-color: var(--accent);
+}
+
+.adhoc-tab-pill {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  background: var(--secondary-dim);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.adhoc-tab-btn.active .adhoc-tab-pill {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+
+/* Buttons */
+.adhoc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.15rem;
+  border-radius: 6px;
+  font-size: 0.84rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out,
+    color 0.15s ease-in-out, box-shadow 0.15s ease-in-out, filter 0.15s ease-in-out;
+}
+
+.adhoc-btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.adhoc-btn-primary:hover {
+  background: var(--accent-hover);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.adhoc-btn-outline {
+  background: var(--bg-panel);
+  border-color: var(--border-glass);
+  color: var(--text-main);
+}
+
+.adhoc-btn-outline:hover {
+  background: var(--bg-subtle);
+  border-color: var(--border-glass-strong);
+}
+
+.adhoc-btn-amber {
+  background: var(--warning-solid);
+  color: var(--on-accent);
+}
+
+.adhoc-btn-amber:hover {
+  filter: brightness(0.88);
+}
+
+.adhoc-btn-sm {
+  padding: 0.45rem 0.85rem;
+  font-size: 0.78rem;
+}
+
+.adhoc-btn-xs {
+  padding: 0.3rem 0.65rem;
+  font-size: 0.72rem;
+}
+
+/* Cadence & Scope Bar */
+.adhoc-cadence-bar {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  padding: 0.75rem 1.25rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  box-shadow: var(--shadow-card);
+}
+
+.adhoc-cadence-left {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.adhoc-timer-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--warning);
+  font-weight: 500;
+  background: var(--warning-dim);
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+}
+
+.adhoc-batch-chip, .adhoc-cadence-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  padding: 0.3rem 0.65rem;
+  border-radius: 6px;
+}
+
+.adhoc-scope-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.adhoc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 4px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-glass);
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* Active Incident Banner */
+.adhoc-incident-banner {
+  background: var(--danger-dim);
+  border: 1px solid var(--danger-border);
+  border-left: 5px solid var(--danger-solid);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  box-shadow: var(--shadow-card);
+  animation: adhocFadeIn 0.3s ease-out;
+}
+
+.adhoc-incident-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--danger-dim);
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  flex-shrink: 0;
+}
+
+.adhoc-incident-content {
+  flex: 1;
+}
+
+.adhoc-incident-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  font-size: 0.88rem;
+  color: var(--danger);
+}
+
+.adhoc-incident-tag {
+  background: var(--danger-solid);
+  color: var(--on-accent);
+  padding: 0.1rem 0.45rem;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.adhoc-incident-meta {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.75rem;
+  color: var(--danger);
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.adhoc-incident-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.adhoc-icon-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--danger);
+  cursor: pointer;
+  padding: 0.35rem;
+  border-radius: 4px;
+}
+
+.adhoc-icon-close-btn:hover {
+  background: var(--danger-dim);
+}
+
+/* Section Header */
+.adhoc-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.adhoc-section-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0 0 0.2rem;
+  letter-spacing: -0.01em;
+}
+
+.adhoc-section-desc {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.adhoc-kpi-summary {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.adhoc-kpi-pill {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.25rem 0.65rem;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.adhoc-kpi-pill.success {
+  background: var(--success-dim);
+  color: var(--success);
+}
+
+.adhoc-kpi-pill.danger {
+  background: var(--danger-dim);
+  color: var(--danger);
+}
+
+.adhoc-kpi-pill.info {
+  background: var(--info-dim);
+  color: var(--info);
+}
+
+/* 4 Health Cards Grid */
+.adhoc-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.25rem;
+}
+
+@media (max-width: 1200px) {
+  .adhoc-cards-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 680px) {
+  .adhoc-cards-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.adhoc-app-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-card);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.adhoc-app-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.adhoc-app-card.attention-card {
+  border-color: var(--warning);
+  box-shadow: 0 0 0 1px var(--warning-border);
+}
+
+.adhoc-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.65rem;
+}
+
+.adhoc-app-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0 0 0.15rem;
+}
+
+.adhoc-app-business {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.35;
+}
+
+.adhoc-status-chip {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  flex-shrink: 0;
+}
+
+.status-healthy {
+  background: var(--success-dim);
+  color: var(--success);
+}
+
+.status-attention {
+  background: var(--warning-dim);
+  color: var(--warning);
+}
+
+.adhoc-card-desc {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin: 0 0 1rem;
+  min-height: 2.2rem;
+}
+
+.adhoc-card-signals {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.76rem;
+  margin-bottom: 1rem;
+}
+
+.adhoc-signal-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.adhoc-signal-label {
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.adhoc-signal-value {
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.text-success { color: var(--success) !important; }
+.text-danger { color: var(--danger) !important; }
+
+.adhoc-card-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: auto;
+  gap: 0.5rem;
+}
+
+.adhoc-teams-channel-btn {
+  background: transparent;
+  border: 1px solid var(--border-glass-strong);
+  color: var(--secondary);
+  font-size: 0.74rem;
+  font-weight: 500;
+  padding: 0.35rem 0.65rem;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: background-color 0.15s ease;
+}
+
+.adhoc-teams-channel-btn:hover {
+  background: var(--secondary-dim);
+}
+
+.adhoc-drill-btn {
+  background: transparent;
+  border: none;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 500;
+}
+
+.adhoc-drill-btn:hover {
+  color: var(--text-main);
+}
+
+/* Consolidated Observability Matrix */
+.adhoc-matrix-section {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  padding: 1.25rem;
+  box-shadow: var(--shadow-card);
+}
+
+.adhoc-matrix-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.adhoc-filter-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.adhoc-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.adhoc-search-box i {
+  position: absolute;
+  left: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.adhoc-search-box input {
+  padding: 0.45rem 1.75rem 0.45rem 2rem;
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  background: var(--bg-base);
+  color: var(--text-main);
+  min-width: 240px;
+}
+
+.adhoc-search-clear {
+  position: absolute;
+  right: 0.5rem;
+  background: transparent;
+  border: none;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.adhoc-filter-group {
+  display: flex;
+  background: var(--bg-base);
+  padding: 0.2rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-glass);
+}
+
+.adhoc-filter-pill {
+  background: transparent;
+  border: none;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.adhoc-filter-pill.active {
+  background: var(--bg-panel);
+  color: var(--text-main);
+  box-shadow: var(--shadow-card);
+}
+
+/* Table */
+.adhoc-table-wrapper {
+  overflow-x: auto;
+}
+
+.adhoc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.adhoc-table th {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-weight: 700;
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-glass);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.adhoc-table td {
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--border-glass);
+  vertical-align: middle;
+}
+
+.adhoc-row:hover {
+  background: var(--bg-glass-hover);
+}
+
+.row-attention {
+  background: var(--warning-dim);
+}
+
+.adhoc-app-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.adhoc-expand-trigger {
+  background: transparent;
+  border: none;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.25rem;
+}
+
+.adhoc-cell-title {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.adhoc-cell-sub {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.adhoc-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+}
+
+.badge-pass {
+  background: var(--success-dim);
+  color: var(--success);
+}
+
+.badge-fail {
+  background: var(--danger-dim);
+  color: var(--danger);
+}
+
+.adhoc-uptime-badge {
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.adhoc-chip-neutral {
+  font-weight: 500;
+  color: var(--text-main);
+}
+
+.adhoc-chip-github {
+  font-weight: 500;
+  color: var(--text-main);
+}
+
+.adhoc-cell-teams-btn {
+  background: transparent;
+  border: 1px solid var(--border-glass);
+  color: var(--secondary);
+  font-size: 0.72rem;
+  font-weight: 500;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.adhoc-cell-teams-btn:hover {
+  background: var(--secondary-dim);
+}
+
+/* Expanded Drawer */
+.adhoc-drawer-row td {
+  background: var(--bg-subtle);
+  padding: 1.25rem 1.5rem;
+}
+
+.adhoc-drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.85rem;
+}
+
+.adhoc-drawer-header h4 {
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-main);
+}
+
+.adhoc-drawer-id {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.adhoc-drawer-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+}
+
+@media (max-width: 800px) {
+  .adhoc-drawer-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.adhoc-drawer-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  padding: 0.85rem;
+  font-size: 0.75rem;
+}
+
+.adhoc-card-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--text-muted);
+  margin-bottom: 0.45rem;
+}
+
+.adhoc-drawer-stat {
+  color: var(--text-main);
+  margin-bottom: 0.25rem;
+}
+
+.adhoc-drawer-error {
+  color: var(--danger);
+  font-weight: 500;
+  margin-top: 0.35rem;
+}
+
+.adhoc-drawer-ok {
+  color: var(--success);
+  font-weight: 500;
+  margin-top: 0.35rem;
+}
+
+/* Teams Alert Routing Feed */
+.adhoc-teams-section {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  padding: 1.25rem;
+}
+
+/* Microsoft Teams logo icon — third-party brand colour (logo only) */
+.adhoc-teams-logo {
+  color: #4f46e5;
+}
+
+[data-theme='dark'] .adhoc-teams-logo {
+  /* lighter tint of the same brand hue for >=3:1 icon contrast on dark panels */
+  color: #818cf8;
+}
+
+.adhoc-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.adhoc-feed-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.85rem 1rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-glass);
+  background: var(--bg-panel);
+  gap: 1rem;
+}
+
+.adhoc-feed-item.feed-critical {
+  border-left: 4px solid var(--danger-solid);
+  background: var(--danger-dim);
+}
+
+.adhoc-feed-item.feed-resolved {
+  border-left: 4px solid var(--success-solid);
+}
+
+.adhoc-feed-item.feed-info {
+  border-left: 4px solid var(--info-solid);
+}
+
+.adhoc-feed-left {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+}
+
+.adhoc-sev-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.15rem 0.45rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+
+.sev-crit {
+  background: var(--danger-solid);
+  color: var(--on-accent);
+}
+
+.sev-res {
+  background: var(--success-solid);
+  color: var(--on-accent);
+}
+
+.sev-info {
+  background: var(--info-solid);
+  color: var(--on-accent);
+}
+
+.adhoc-feed-topline {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  margin-bottom: 0.2rem;
+}
+
+.adhoc-feed-app {
+  color: var(--text-main);
+}
+
+.adhoc-feed-comp {
+  color: var(--text-muted);
+}
+
+.adhoc-feed-channel {
+  color: var(--secondary);
+  font-weight: 500;
+  font-size: 0.72rem;
+}
+
+.adhoc-feed-summary {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.adhoc-feed-right {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-shrink: 0;
+}
+
+.adhoc-feed-time {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+/* Modal Dialog for Teams Simulator */
+.adhoc-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.adhoc-teams-dialog {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-glass);
+  border-radius: 10px;
+  width: 100%;
+  max-width: 580px;
+  overflow: hidden;
+  box-shadow: var(--shadow-pop);
+  color: var(--text-main);
+}
+
+.adhoc-teams-dialog-header {
+  padding: 1rem 1.25rem;
+  background: var(--cdk-slate);
+  color: var(--on-accent);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.adhoc-teams-brand {
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+}
+
+.adhoc-dialog-close {
+  background: transparent;
+  border: none;
+  color: var(--on-accent);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.adhoc-teams-dialog-body {
+  padding: 1.25rem;
+}
+
+.adhoc-teams-channel-info h3 {
+  font-size: 1.05rem;
+  margin: 0 0 0.25rem;
+}
+
+.adhoc-teams-channel-info p {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: 0 0 1rem;
+}
+
+.adhoc-teams-msg-card {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  padding: 1rem;
+}
+
+.adhoc-teams-msg-sender {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 0.65rem;
+  font-size: 0.82rem;
+}
+
+.adhoc-teams-bot-avatar {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  font-size: 0.65rem;
+  padding: 0.25rem 0.45rem;
+  border-radius: 4px;
+}
+
+.adhoc-teams-msg-text {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-main);
+  margin: 0 0 0.75rem;
+}
+
+.adhoc-teams-msg-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border-glass);
+  padding-top: 0.5rem;
+}
+
+.adhoc-teams-dialog-footer {
+  padding: 0.85rem 1.25rem;
+  background: var(--bg-subtle);
+  border-top: 1px solid var(--border-glass);
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+}

@@ -1,0 +1,995 @@
+/* ============================================
+  Live Sessions — NOVA Glassmorphism Design
+  Mirrors the Win Patching dashboard exactly.
+  ============================================ */
+
+/* ─── Root Layout ─── */
+.live-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ─── Header (mirrors precheck-header / postcheck-header) ─── */
+.ls-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  gap: 20px;
+  flex-shrink: 0;
+}
+
+.ls-header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.ls-header-left h2 {
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ls-header-left p {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.ls-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ls-session-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-glass);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* ─── Ghost Button (sm) ─── */
+.btn-ghost-sm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-glass);
+  background: var(--bg-glass);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+}
+
+.btn-ghost-sm:hover:not(:disabled) {
+  background: var(--bg-glass-hover);
+  color: var(--text-main);
+  border-color: var(--border-glass-strong);
+}
+
+.btn-ghost-sm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ─── Step Content Wrapper ─── */
+.ls-step-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ─── Two-column Layout (Step 1) ─── */
+.ls-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 1100px) {
+  .ls-two-col {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ─── Card (generic glass card) ─── */
+.ls-card {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.ls-card-centered {
+  max-width: 640px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.ls-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.ls-card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.ls-card-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.ls-card-header p {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 4px 0 0;
+}
+
+.ls-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* ─── Dropzone ─── */
+.ls-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 36px 20px;
+  border: 2px dashed var(--border-glass-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  cursor: pointer;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.ls-dropzone:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.ls-dropzone.has-file {
+  border-color: var(--success);
+  background: var(--success-dim);
+  border-style: solid;
+}
+
+.ls-file-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-main);
+  word-break: break-all;
+}
+
+.ls-file-size {
+  font-size: 11px;
+  color: var(--text-dimmed);
+}
+
+.ls-file-hint {
+  font-size: 11px;
+  color: var(--text-dimmed);
+}
+
+/* ─── Alerts ─── */
+.ls-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ls-alert-error {
+  background: var(--danger-dim);
+  color: var(--danger);
+  border: 1px solid var(--danger-border);
+}
+
+.ls-alert-warning {
+  background: var(--warning-dim);
+  color: var(--warning);
+  border: 1px solid var(--warning-border);
+}
+
+.ls-alert-info {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+  border: 1px solid var(--accent-border);
+}
+
+/* ─── Success Banner ─── */
+.ls-success-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  border-radius: var(--radius-md);
+  background: var(--success-dim);
+  border: 1px solid var(--success-border);
+}
+
+.ls-success-banner i {
+  font-size: 24px;
+  color: var(--success);
+  flex-shrink: 0;
+}
+
+.ls-success-banner strong {
+  display: block;
+  font-size: 14px;
+  color: var(--success);
+}
+
+.ls-success-banner span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.ls-success-banner code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-subtle);
+  padding: 2px 8px;
+  border-radius: 4px;
+  color: var(--text-main);
+}
+
+/* ─── Session List (Pending / Ready panel) ─── */
+.ls-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 200px;
+  padding-right: 4px;
+}
+
+.ls-session-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-glass);
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+}
+
+.ls-session-row.ready {
+  cursor: pointer;
+}
+
+.ls-session-row.ready:hover {
+  border-color: var(--success-border);
+  background: var(--success-dim);
+  transform: translateY(-1px);
+}
+
+.ls-session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ls-session-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ls-session-info code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-main);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ls-session-info span {
+  font-size: 11px;
+  color: var(--text-dimmed);
+}
+
+.ls-ready-section {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-glass);
+}
+
+.ls-ready-section h4 {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-main);
+}
+
+/* ─── Badges ─── */
+.ls-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.ls-badge.success {
+  background: var(--success-dim);
+  color: var(--success);
+}
+
+.ls-badge.warning {
+  background: var(--warning-dim);
+  color: var(--warning);
+}
+
+.ls-badge.danger {
+  background: var(--danger-dim);
+  color: var(--danger);
+}
+
+/* ─── Empty State ─── */
+.ls-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.ls-empty i {
+  font-size: 28px;
+  opacity: 0.6;
+  color: var(--text-dimmed);
+}
+
+.ls-empty p {
+  font-size: 13px;
+  margin: 0;
+}
+
+/* ─── Post-check Info Box ─── */
+.ls-session-info-box {
+  padding: 16px 20px;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ls-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.ls-info-row span:first-child {
+  font-weight: 500;
+  color: var(--text-dimmed);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: var(--tracking-caps);
+}
+
+.ls-info-row code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-main);
+  background: var(--bg-subtle);
+  padding: 2px 10px;
+  border-radius: 4px;
+}
+
+/* ─── KPI Row (Step 3, mirrors summary-kpi-grid) ─── */
+.ls-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.ls-kpi-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  transition: transform var(--transition-base);
+}
+
+.ls-kpi-card:hover {
+  transform: translateY(-3px);
+}
+
+.ls-kpi-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.ls-kpi-card h3 {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-main);
+}
+
+.ls-kpi-card p {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+}
+
+/* ─── Table Card (mirrors summary-table-wrapper) ─── */
+.ls-table-card {
+  padding: 0;
+  overflow: auto;
+  max-height: clamp(280px, calc(100vh - 420px), 700px);
+}
+
+.ls-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-glass);
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  backdrop-filter: blur(12px);
+  z-index: 3;
+}
+
+.ls-table-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.ls-table-header h3 i {
+  color: var(--accent-text);
+}
+
+.ls-table-wrap {
+  overflow-x: auto;
+}
+
+/* ─── Data Table (mirrors summary-table exactly) ─── */
+.ls-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ls-table thead {
+  position: sticky;
+  top: 57px; /* below table header */
+  background: var(--bg-subtle);
+  backdrop-filter: blur(12px);
+  z-index: 2;
+}
+
+.ls-table th {
+  text-align: left;
+  padding: 12px 16px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dimmed);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.ls-table td {
+  padding: 12px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.ls-table-row {
+  animation: fadeIn 0.3s ease forwards;
+  opacity: 0;
+  transition: background var(--transition-fast);
+}
+
+.ls-table-row:hover {
+  background: var(--bg-glass-hover);
+}
+
+.ls-session-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent-text);
+  background: var(--accent-dim);
+  padding: 3px 10px;
+  border-radius: 4px;
+}
+
+.btn-view-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-glass);
+  background: var(--bg-glass);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+}
+
+.btn-view-session:hover {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+  border-color: var(--accent-border);
+}
+
+/* ─── Session Details — Header elements ─── */
+.btn-back-round {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-glass);
+  background: var(--bg-glass-hover);
+  color: var(--text-main);
+  cursor: pointer;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.btn-back-round:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.ls-session-code-small {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--accent-text);
+  background: var(--accent-dim);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--accent-border);
+}
+
+/* ─── Full Loading State ─── */
+.ls-full-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 80px 20px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* ─── Session Details — KPI Grid (reuses summary-kpi-*) ─── */
+/* Already defined in Summary.css — the classes are shared.
+   We define fallbacks here for when Summary.css isn't loaded: */
+.summary-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.summary-kpi {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  transition: transform var(--transition-base);
+}
+
+.summary-kpi:hover {
+  transform: translateY(-3px);
+}
+
+.summary-kpi-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.summary-kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+  display: block;
+}
+
+.summary-kpi-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  display: block;
+}
+
+/* ─── Session Details — Table (mirrors summary-table-wrapper) ─── */
+.summary-table-wrapper {
+  overflow: auto;
+  max-height: clamp(280px, calc(100vh - 420px), 700px);
+}
+
+.summary-table-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.summary-table-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+
+.summary-table-header h3 i {
+  color: var(--accent-text);
+}
+
+.summary-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.summary-table thead {
+  position: sticky;
+  top: 0;
+  background: var(--bg-subtle);
+  backdrop-filter: blur(12px);
+  z-index: 2;
+}
+
+.summary-table th {
+  text-align: left;
+  padding: 12px 16px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dimmed);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.summary-table td {
+  padding: 12px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.summary-row {
+  animation: fadeIn 0.3s ease forwards;
+  opacity: 0;
+  transition: background var(--transition-fast);
+  cursor: pointer;
+}
+
+.summary-row:hover {
+  background: var(--bg-glass-hover);
+}
+
+.summary-server-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.summary-server-name {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+/* ─── Toggle Label ─── */
+.ls-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ls-toggle-label input[type="checkbox"] {
+  accent-color: var(--accent-text);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+/* ─── Export Button (reuse from Summary.css) ─── */
+.btn-export {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-glass);
+  background: var(--bg-glass);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+}
+
+.btn-export:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-main);
+}
+
+/* ─── Badges reused from Summary ─── */
+.safe-badge {
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.critical-badge {
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--danger-dim);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+}
+
+.score-badge {
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ─── Expanded Services Sub-table ─── */
+.ls-services-expand {
+  padding: 16px;
+  animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: top;
+  overflow: hidden;
+}
+
+@keyframes slideDown {
+  0% { opacity: 0; transform: scaleY(0.9) translateY(-10px); }
+  100% { opacity: 1; transform: scaleY(1) translateY(0); }
+}
+
+.ls-services-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ls-services-table th {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dimmed);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.ls-services-table td {
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+/* ─── Pagination ─── */
+.ls-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-glass);
+}
+
+/* ─── Failed Hosts Section ─── */
+.ls-failed-section {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ls-failed-section h3 {
+  font-size: 15px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.ls-failed-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ls-failed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-dim);
+  border: 1px solid var(--danger-border);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-main);
+}
+
+/* ─── Action Bar (mirrors ServerSelection.css action-bar exactly) ─── */
+/* Uses the global .action-bar, .action-bar-info, .btn-proceed, .btn-back
+   defined in ServerSelection.css. These are already loaded globally.
+   Adding duplicates as safety net for standalone rendering: */
+
+.action-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(12px);
+  flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+}
+
+.action-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.btn-proceed {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 28px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.btn-proceed:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-pop);
+}
+
+.btn-proceed:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-glass);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+}
+
+.btn-back:hover:not(:disabled) {
+  background: var(--bg-glass-hover);
+  color: var(--text-main);
+}
+
+.btn-back:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ─── Stepper (reuses global stepper-container / stepper classes from Stepper.css) ─── */
+/* Already defined in Stepper.css — no duplication needed.
+   The .stepper-container, .stepper, .stepper-step, .step-circle,
+   .stepper-step-info, .step-label, .step-desc, .step-connector,
+   .connector-line, .connector-fill classes are all global. */

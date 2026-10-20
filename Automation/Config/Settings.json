@@ -1,0 +1,19 @@
+{
+  "SccmSiteServer": "ORDPGBLSCCM11.global.cdk.com",
+  "SiteCode": "T01",
+  "TargetCollectionName": "test-poc",
+  "SuggestedSUGName": "Server - sept 2026",
+  "MaintenanceWindow": {
+    "StartUtc": "06:00",
+    "EndUtc": "08:00",
+    "TimeZone": "UTC"
+  },
+  "OutputRoot": ".\\Reports",
+  "RequireADModule": false,
+  "RequireSccmModuleForPhase1": true,
+  "AllowWriteOperations": true,
+  "DeploymentPackageName": "",
+  "DistributionPointGroupName": "",
+  "LimitingCollectionName": "All Systems",
+  "Phase3ImplementationStatus": "DISABLED_PENDING_APPROVAL_AND_SCCM_SCHEDULING_VERIFICATION"
+}

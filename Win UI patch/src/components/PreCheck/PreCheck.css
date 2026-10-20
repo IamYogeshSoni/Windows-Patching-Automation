@@ -1,0 +1,268 @@
+.precheck {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+
+.precheck-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  gap: 20px;
+  flex-shrink: 0;
+}
+
+.precheck-title h2 {
+  font-size: 18px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.precheck-title p {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.precheck-progress-info {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.progress-stats {
+  display: flex;
+  gap: 16px;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.stat-item.passed { color: var(--success); }
+.stat-item.warned { color: var(--warning); }
+.stat-item.failed { color: var(--danger); }
+
+.progress-bar-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 180px;
+}
+
+.progress-bar-track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-subtle);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.progress-percent {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent-text);
+  min-width: 36px;
+  text-align: right;
+}
+
+/* Grid of server cards — scrollable with bounded height */
+.precheck-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  grid-auto-rows: max-content;
+  gap: 14px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.precheck-card {
+  padding: 16px;
+  animation: fadeIn 0.4s ease forwards;
+  opacity: 0;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+  position: relative;
+  overflow: hidden;
+}
+
+.precheck-card.scanning {
+  border-color: var(--accent-border);
+}
+
+.precheck-card.scanning::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s linear infinite;
+}
+
+.precheck-card.passed { border-color: var(--success-border); }
+.precheck-card.failed { border-color: var(--danger-border); }
+.precheck-card.warning { border-color: var(--warning-border); }
+
+.precheck-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.card-server-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-main);
+  display: block;
+}
+
+.card-server-meta {
+  font-size: 11px;
+  color: var(--text-dimmed);
+  display: block;
+  margin-top: 2px;
+}
+
+.card-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.card-status-badge.passed { background: var(--success-dim); color: var(--success); }
+.card-status-badge.failed { background: var(--danger-dim); color: var(--danger); }
+.card-status-badge.warning { background: var(--warning-dim); color: var(--warning); }
+.card-status-badge.running { background: var(--accent-dim); color: var(--accent-text); }
+.card-status-badge.pending { background: var(--bg-subtle); color: var(--text-dimmed); }
+
+.check-items-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.check-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border: 1px solid transparent;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), opacity var(--transition-fast);
+}
+
+.check-item.passed {
+  border-color: var(--success-border);
+  background: var(--success-dim);
+}
+
+.check-item.warning {
+  border-color: var(--warning-border);
+  background: var(--warning-dim);
+}
+
+.check-item.failed {
+  border-color: var(--danger-border);
+  background: var(--danger-dim);
+}
+
+.check-item i {
+  font-size: 14px;
+  color: var(--text-dimmed);
+}
+
+.check-item.passed i { color: var(--success); }
+.check-item.warning i { color: var(--warning); }
+.check-item.failed i { color: var(--danger); }
+
+.check-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.check-result {
+  font-size: 12px;
+}
+
+.check-result .fa-check { color: var(--success); }
+.check-result .fa-exclamation { color: var(--warning); }
+.check-result .fa-xmark { color: var(--danger); }
+
+.pending-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-dimmed);
+  opacity: 0.4;
+}
+
+/* Action bar buttons */
+.btn-back {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-glass);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+}
+
+.btn-back:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-main);
+}
+
+.btn-retry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--warning-border);
+  background: var(--warning-dim);
+  color: var(--warning);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+}
+
+.btn-retry:hover {
+  background: var(--warning-dim);
+}

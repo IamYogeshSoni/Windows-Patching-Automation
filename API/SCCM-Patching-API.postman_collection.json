@@ -1,0 +1,813 @@
+{
+  "info": {
+    "name": "SCCM Patching API v4",
+    "description": "Run in numbered order. Every POST returns a job; keep sending '05 Get job' until status is SUCCEEDED, COMPLETED_WITH_ISSUES, FAILED or OUTCOME_UNKNOWN. Each 05 response contains the new log lines (log[]); logAfter moves forward automatically. See API-Testing.md.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "apiKey",
+      "value": ""
+    },
+    {
+      "key": "adminKey",
+      "value": ""
+    },
+    {
+      "key": "user",
+      "value": "Your Name"
+    },
+    {
+      "key": "jobId",
+      "value": ""
+    },
+    {
+      "key": "logAfter",
+      "value": "-1"
+    },
+    {
+      "key": "precheckJobId",
+      "value": ""
+    },
+    {
+      "key": "sugId",
+      "value": ""
+    },
+    {
+      "key": "collectionId",
+      "value": ""
+    },
+    {
+      "key": "newCollectionName",
+      "value": "Patch Oct 2026 - DSLAB test"
+    },
+    {
+      "key": "deploymentName",
+      "value": "Patch Testing Oct 2026"
+    },
+    {
+      "key": "windowStartUtc",
+      "value": "2026-10-20T06:00:00Z"
+    },
+    {
+      "key": "deadlineUtc",
+      "value": "2026-10-20T06:30:00Z"
+    },
+    {
+      "key": "reportFolder",
+      "value": ""
+    },
+    {
+      "key": "lockJobId",
+      "value": ""
+    },
+    {
+      "key": "runId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "01 Health",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/health"
+      }
+    },
+    {
+      "name": "02 Connection test",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/connection-test"
+      }
+    },
+    {
+      "name": "03 Environment check",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/environment-check"
+      }
+    },
+    {
+      "name": "04 Prerequisites",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);",
+              "if (job.job_id) pm.collectionVariables.set('precheckJobId', job.job_id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/prerequisites"
+      }
+    },
+    {
+      "name": "05 Get job + new log lines (waits up to 60s)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.log_next !== undefined) pm.collectionVariables.set('logAfter', String(job.log_next));",
+              "const r = job.result || {};",
+              "if (job.kind === 'sugs' && job.status === 'SUCCEEDED' && !pm.collectionVariables.get('sugId')) {",
+              "  const s = [].concat(r.sugs || []); if (s.length) pm.collectionVariables.set('sugId', s[0].id);",
+              "}",
+              "if (job.kind === 'inventory' && job.status === 'SUCCEEDED') {",
+              "  const s = [].concat(r.sugs || []), c = [].concat(r.collections || []);",
+              "  pm.collectionVariables.set('runId', job.job_id);",
+              "  if (!pm.collectionVariables.get('sugId') && s.length) pm.collectionVariables.set('sugId', s[0].id);",
+              "  if (!pm.collectionVariables.get('collectionId') && c.length) pm.collectionVariables.set('collectionId', c[0].id);",
+              "}",
+              "if (r.report_folder_name && job.kind !== 'prerequisites') pm.collectionVariables.set('reportFolder', r.report_folder_name);",
+              "if (r.selectable_servers) console.log('READY servers:', JSON.stringify(r.selectable_servers));",
+              "(job.log || []).forEach(l => console.log(l.line));",
+              "pm.test('status: ' + job.status + ' | log lines: ' + job.log_lines + (r.report_headline ? ' | ' + r.report_headline : ''), () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/jobs/{{jobId}}?wait=60&log_after={{logAfter}}"
+      }
+    },
+    {
+      "name": "06 SUG list (with KBs)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/sugs",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name_filter\": \"\",\n  \"include_kbs\": true\n}"
+        }
+      }
+    },
+    {
+      "name": "07 SUG list - latest (instant)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/sugs/latest"
+      }
+    },
+    {
+      "name": "08 Collection list (optional)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/collections",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name_filter\": \"\",\n  \"include_members\": true\n}"
+        }
+      }
+    },
+    {
+      "name": "09 Deployment - selected servers (only when approved)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/deployments",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"precheck_job_id\": \"{{precheckJobId}}\",\n  \"servers\": [\n    \"c03dghhypv8871\",\n    \"c03dghhypv3621\"\n  ],\n  \"include_not_ready_servers\": false,\n  \"sug_id\": \"{{sugId}}\",\n  \"new_collection_name\": \"{{newCollectionName}}\",\n  \"deployment_name\": \"{{deploymentName}}\",\n  \"maintenance_window_start_utc\": \"{{windowStartUtc}}\",\n  \"maintenance_window_hours\": 6,\n  \"deadline_utc\": \"{{deadlineUtc}}\",\n  \"restart_mode\": \"Script\",\n  \"change_ticket\": \"CHG123\",\n  \"approver\": \"Approver corporate ID\",\n  \"approval_reference\": \"Approval system reference\",\n  \"readiness_confirmed\": true,\n  \"final_confirmation\": \"{{deploymentName}}\"\n}"
+        }
+      }
+    },
+    {
+      "name": "10 Active deployment (lock)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/deployments/active"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const a = pm.response.json();",
+              "if (a.active_deployment) pm.collectionVariables.set('lockJobId', a.active_deployment.job_id);",
+              "pm.test(a.state + ': ' + a.message, () => true);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 Deployment resume",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Idempotency-Key",
+            "value": "{{$guid}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/deployments/resume",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"report_folder\": \"{{reportFolder}}\"\n}"
+        }
+      }
+    },
+    {
+      "name": "12 Release lock (admin)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "X-Admin-Key",
+            "value": "{{adminKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/deployments/release-lock",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"job_id\": \"{{lockJobId}}\",\n  \"reason\": \"Checked SCCM: <what you verified>\"\n}"
+        }
+      }
+    },
+    {
+      "name": "13 Deployment lookup",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/deployments/lookup",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"deployment_name\": \"{{deploymentName}}\"\n}"
+        }
+      }
+    },
+    {
+      "name": "14 Reports - list",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/reports?limit=50"
+      }
+    },
+    {
+      "name": "15 Report - data",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/reports/{{jobId}}"
+      }
+    },
+    {
+      "name": "16 Report - HTML (use Preview)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/reports/{{jobId}}/html"
+      }
+    },
+    {
+      "name": "17 Jumphost reports - list",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/reports/jumphost",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"limit\": 50\n}"
+        }
+      }
+    },
+    {
+      "name": "18 Jumphost report - import",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/reports/jumphost/import",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"report_folder\": \"{{reportFolder}}\"\n}"
+        }
+      }
+    },
+    {
+      "name": "19 Job log (whole log)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/jobs/{{jobId}}/log?after=-1&limit=5000"
+      }
+    },
+    {
+      "name": "20 List jobs",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/jobs?limit=20"
+      }
+    },
+    {
+      "name": "21 Audit log",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/audit?limit=100"
+      }
+    },
+    {
+      "name": "22 DSLAB connection test",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/dslab/connection-test"
+      }
+    },
+    {
+      "name": "23 DSLAB server validation",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/dslab/validate-servers",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"servers\": [\n    \"c03dghhypv8871\",\n    \"c03dghhypv3621\"\n  ],\n  \"kb\": []\n}"
+        }
+      }
+    },
+    {
+      "name": "24 Dry run - start (testing only)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/dry-run/start"
+      }
+    },
+    {
+      "name": "25 Dry run - continue (testing only)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const job = pm.response.json();",
+              "if (job.job_id) { pm.collectionVariables.set('jobId', job.job_id); pm.collectionVariables.set('logAfter', '-1'); }",
+              "if (pm.response.code === 409 && job.detail && job.detail.message) pm.test('LOCKED: ' + job.detail.message, () => true);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
+          },
+          {
+            "key": "X-User",
+            "value": "{{user}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{baseUrl}}/api/sccm/dry-run/continue",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"run_id\": \"{{runId}}\",\n  \"sug_id\": \"{{sugId}}\",\n  \"collection_id\": \"{{collectionId}}\"\n}"
+        }
+      }
+    }
+  ]
+}

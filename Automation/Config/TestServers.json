@@ -1,0 +1,12 @@
+[
+  {
+    "Fqdn": "c03dghhypv8871.dslab.ad.adp.com",
+    "ExpectedIPv4": "100.78.20.19",
+    "Allowed": true
+  },
+  {
+    "Fqdn": "c03dghhypv3621.dslab.ad.adp.com",
+    "ExpectedIPv4": "100.78.20.12",
+    "Allowed": true
+  }
+]

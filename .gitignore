@@ -1,0 +1,42 @@
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+.vs/
+*.swp
+
+# Secrets / local config
+.env
+*.env
+!*.env.example
+
+# Python (API)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node / Vite (Win UI patch)
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+
+# Logs
+*.log
+logs.txt
+
+# Generated automation output (keep folder placeholders)
+Automation/Reports/*
+!Automation/Reports/.gitkeep
+Automation/Evidence/*
+!Automation/Evidence/INPUTS.md
+
+# Archives / backups
+*.zip
+*backup*.ps1
+*backuo*.ps1

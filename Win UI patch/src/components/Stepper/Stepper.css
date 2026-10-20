@@ -1,0 +1,120 @@
+.stepper-container {
+  padding: 10px 16px;
+  margin-bottom: 16px;
+}
+
+.stepper {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.stepper-step {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-md);
+  cursor: default;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+  flex-shrink: 0;
+}
+
+.stepper-step.completed {
+  cursor: pointer;
+}
+
+.stepper-step.completed:hover {
+  background: var(--bg-glass-hover);
+}
+
+.step-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  border: 2px solid var(--border-glass-strong);
+  color: var(--text-dimmed);
+  background: transparent;
+  transition: background-color var(--transition-base), border-color var(--transition-base), color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base), opacity var(--transition-base);
+  flex-shrink: 0;
+}
+
+.stepper-step.active .step-circle {
+  border-color: var(--accent);
+  color: var(--on-accent);
+  background: var(--accent);
+  box-shadow: var(--focus-ring);
+  animation: pulse-glow 2.5s infinite;
+}
+
+.stepper-step.completed .step-circle {
+  border-color: var(--success-solid);
+  color: var(--on-accent);
+  background: var(--success-solid);
+}
+
+.stepper-step-info {
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+.step-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dimmed);
+  transition: color var(--transition-base);
+}
+
+.stepper-step.active .step-label {
+  color: var(--text-main);
+}
+
+.stepper-step.completed .step-label {
+  color: var(--success);
+}
+
+.step-desc {
+  font-size: 11px;
+  color: var(--text-dimmed);
+  margin-top: 2px;
+}
+
+.stepper-step.active .step-desc {
+  color: var(--text-muted);
+}
+
+.step-connector {
+  display: flex;
+  align-items: center;
+  padding-top: 15px;
+  flex: 1;
+  min-width: 40px;
+  max-width: 100px;
+}
+
+.connector-line {
+  height: 2px;
+  width: 100%;
+  background: var(--border-glass-strong);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+.connector-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--success);
+  border-radius: 1px;
+  transition: width 0.6s ease;
+}
+
+.step-connector.completed .connector-fill {
+  width: 100%;
+}

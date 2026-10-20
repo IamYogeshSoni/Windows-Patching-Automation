@@ -1,0 +1,125 @@
+
+# 1. Go to your automation project folder
+Set-Location 'C:\Users\soniyoge1\Downloads\SCCM_EndToEnd_Automation_Test_Package\SCCM_EndToEnd_Automation'
+
+# 2. Confirm the project files exist
+Get-ChildItem .\Scripts
+Get-ChildItem .\Config
+
+# 3. Import the Configuration Manager PowerShell module
+Import-Module 'C:\Program Files (x86)\Microsoft Configuration Manager\AdminConsole\bin\ConfigurationManager\ConfigurationManager.psd1'
+
+# 4. Create the SCCM site drive if it does not already exist
+if (-not (Get-PSDrive -Name T01 -ErrorAction SilentlyContinue)) {
+    New-PSDrive -Name T01 -PSProvider CMSite -Root 'ORDPGBLSCCM11.global.cdk.com' -Description 'CDK-T01'
+}
+
+# 5. Verify read-only access
+Get-CMSite | Select-Object SiteCode, SiteName, Version
+
+
+------2-------
+
+
+# View configured settings
+Get-Content .\Config\Settings.json
+
+# View the approved POC target list
+Get-Content .\Config\TestServers.json
+
+# Unblock reviewed project scripts if Windows marked them as downloaded
+Get-ChildItem .\Scripts -Filter *.ps1 -Recurse |
+    Unblock-File
+
+# Phase 0: environment checks
+.\Scripts\00-EnvironmentCheck.ps1
+
+# Phase 1: prerequisite checks
+.\Scripts\01-PrerequisiteChecks.ps1
+
+# Phase 2: read-only dry run
+.\Scripts\02-ReadOnlyDryRun.ps1
+
+# Phase 3: Actual RUN
+.\Scripts\Invoke-SCCMRequiredPatchPOC.ps1
+
+
+-----3-------
+
+
+# List reports from the most recent runs
+Get-ChildItem .\Reports -Directory |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 5 FullName, LastWriteTime
+
+# Find dry-run reports
+Get-ChildItem .\Reports -Recurse -File |
+    Where-Object { $_.Name -match 'DryRunPlan|Available_SUGs|Selected_SUG_Updates' } |
+    Select-Object FullName, LastWriteTime
+
+
+
+---4-----
+
+Set-Location T01:
+
+Get-CMDeviceCollection |
+    Where-Object {
+        $_.Name -like '*test*' -or
+        $_.Name -like '*poc*'
+    } |
+    Select-Object Name, CollectionID, CollectionType
+
+
+
+If dry run exit with issue --
+
+step1
+# Go to the project folder
+Set-Location 'C:\Users\soniyoge1\Downloads\SCCM_EndToEnd_Automation_Test_Package\SCCM_EndToEnd_Automation'
+
+# Import the Configuration Manager module
+Import-Module 'C:\Program Files (x86)\Microsoft Configuration Manager\AdminConsole\bin\ConfigurationManager\ConfigurationManager.psd1' -Force
+
+# Check whether the site drive exists
+Get-PSDrive T01 -ErrorAction SilentlyContinue
+
+Step 2
+New-PSDrive -Name T01 `
+    -PSProvider CMSite `
+    -Root 'ORDPGBLSCCM11.global.cdk.com' `
+    -Description 'CDK-T01'
+
+step 3
+Set-Location T01:
+
+Get-CMSite |
+    Select-Object SiteCode, SiteName, Version
+
+Get-CMDeviceCollection |
+    Select-Object -First 5 Name, CollectionID
+
+
+step 4
+# Confirm the drive exists
+Get-PSDrive T01
+
+# Switch to the SCCM site drive
+Set-Location T01:
+
+# Test read-only site access
+Get-CMSite |
+    Select-Object SiteCode, SiteName, Version
+
+# Test read-only collection access
+Get-CMDeviceCollection |
+    Select-Object -First 5 Name, CollectionID
+
+step 5 
+Set-Location 'C:\Users\soniyoge1\Downloads\SCCM_EndToEnd_Automation_Test_Package\SCCM_EndToEnd_Automation'
+
+.\Scripts\02-ReadOnlyDryRun.ps1
+
+2026-10-14 16:00
+2026-10-14 20:00
+Test-Auto_dep
