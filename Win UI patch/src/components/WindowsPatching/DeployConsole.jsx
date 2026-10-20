@@ -4,11 +4,10 @@ import {
   ApiError, asArray, describeError, pollJob, toUtcIso, toUtcInput,
   listReports, getReport, prerequisites, latestSugs, listSugs, latestCollections, listCollections, listAdServers, latestAdServers,
 } from '../../api/sccmApi'
-import { Card, Banner, Modal, Spinner, fmtUtc, fmtAgo, shortHost, useNow } from './ui'
+import { Card, Banner, EnvTag, Modal, Spinner, StatusPill, fmtUtc, fmtAgo, shortHost, useNow } from './ui'
 import { shortName } from './hooks'
 import ChangeTicketModal from './ChangeTicketModal'
 import AdServerPicker from './AdServerPicker'
-import { CHANGE_API_ENABLED } from '../../api/changeApi'
 
 const SAFE = /^[A-Za-z0-9 _.\-()]+$/
 const PLAN_KEY = 'nova-wp-plan-v3'
@@ -17,19 +16,19 @@ const MIN_LEFT = 30 * 60_000
 const safeText = (s) => String(s || '').replace(/[^A-Za-z0-9 _.\-()]/g, ' ').replace(/\s+/g, ' ').trim()
 const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-')
 
-function defaultPlan(user) {
+function defaultPlan() {
   const start = new Date(Date.now() + 15 * 60_000)
   start.setUTCMinutes(Math.ceil(start.getUTCMinutes() / 5) * 5, 0, 0)
   return {
-    adDomain: '', adFilter: '', adSearchBase: '', adJobId: null,
+    step: 'servers', adDomain: '', adFilter: '', adSearchBase: '', adJobId: null,
     servers: [], includeNotReady: false, sugId: null, sugName: '', collectionMode: 'new', newCollectionName: '', nameTouched: false,
     collectionId: null, collectionName: '', deploymentName: '', deploymentTouched: false,
     windowStart: toUtcInput(start), windowHours: 6, deadlineMode: 'asap', deadline: toUtcInput(new Date(start.getTime() + 30 * 60_000)),
     restartMode: 'Script', changeTicket: '', chg: null, approver: '', approvalReference: '', kbsText: '', confirmed: false,
   }
 }
-const loadPlan = (user) => {
-  try { return { ...defaultPlan(user), ...JSON.parse(localStorage.getItem(PLAN_KEY)), confirmed: false } } catch { return defaultPlan(user) }
+const loadPlan = () => {
+  try { return { ...defaultPlan(), ...JSON.parse(localStorage.getItem(PLAN_KEY)), confirmed: false } } catch { return defaultPlan() }
 }
 
 const selectStyles = {
@@ -71,14 +70,14 @@ function useListJob(latest, start, key, enabled = true) {
 const startSugs = () => listSugs()
 const startCollections = () => listCollections()
 
-export default function DeployConsole({ status, run, user, onStart, onGoLive, onOpenReport }) {
-  const [plan, setPlanState] = useState(() => loadPlan(user))
+export default function DeployConsole({ status, run, onStart, onGoLive, onOpenReport }) {
+  const [plan, setPlanState] = useState(() => loadPlan())
   const setPlan = (patch) => setPlanState(p => {
     const next = { ...p, ...(typeof patch === 'function' ? patch(p) : patch) }
     try { localStorage.setItem(PLAN_KEY, JSON.stringify({ ...next, confirmed: false })) } catch { /* unavailable */ }
     return next
   })
-  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [reviewOpen, setReviewOpen] = useState(false)
   const [chgOpen, setChgOpen] = useState(false)
   const now = useNow(true, 30_000)
 
@@ -177,27 +176,48 @@ export default function DeployConsole({ status, run, user, onStart, onGoLive, on
   const locked = status.active?.locked
   const runBusy = ['running', 'paused', 'blocked'].includes(run.phase)
 
-  const checks = [
+  /* Test servers need no change request; any other server is pre-prod / production */
+  const envByName = useMemo(() => {
+    const m = new Map()
+    for (const r of asArray(ad.result?.servers)) if (r?.Environment) m.set(shortName(r.Name || r.Fqdn), r.Environment)
+    for (const r of serverRows) if (r?.Environment) m.set(shortName(r.Server), r.Environment)
+    return m
+  }, [ad.result, serverRows])
+  // Unknown counts as pre-prod / prod, so a change request is never skipped by mistake
+  const envOf = (s) => envByName.get(shortName(s)) || 'Pre-prod / Prod'
+  const prodSelected = plan.servers.filter(s => envOf(s) !== 'Test')
+  const changeNeeded = prodSelected.length > 0
+
+  /* Checks per step; the review modal shows them all */
+  const platform = [
     { ok: status.api === 'up', label: 'SCCM API reachable', hint: status.error || 'The API did not answer.' },
-    { ok: Boolean(user?.trim()), label: user ? `Requested by ${user}` : 'Your name entered', hint: 'Enter your name at the top right; it is recorded on the deployment and in the audit log.' },
     { ok: health?.deployment_enabled !== false, label: 'Deployments enabled on the server', hint: 'SCCM_ALLOW_DEPLOYMENT is false on the API.' },
     { ok: !locked, label: 'No other deployment in progress', hint: status.active?.message },
-    { ok: Boolean(plan.adJobId) && adAgeOk, label: ad.job ? `Server list from AD (${ad.result?.domain || 'domain'})` : 'Servers listed from AD', hint: ad.job ? 'The AD list is older than 24 hours; search AD again.' : 'Search AD and choose the servers.' },
-    { ok: plan.servers.length > 0 && plan.servers.length <= maxServers, label: `${plan.servers.length || 'No'} server${plan.servers.length === 1 ? '' : 's'} selected`, hint: plan.servers.length > maxServers ? `At most ${maxServers} servers per deployment.` : 'Select at least one server.' },
-    { ok: notReadySelected.length === 0 || plan.includeNotReady, label: notReadySelected.length ? `${notReadySelected.length} selected server${notReadySelected.length === 1 ? ' is' : 's are'} NOT READY` : 'Selected servers are READY', hint: 'Deselect them, or allow NOT READY servers.' },
-    { ok: Boolean(sug), label: sug ? `Update group: ${sug.name}` : 'Update group selected', hint: 'Choose a software update group.' },
-    plan.collectionMode === 'new'
-      ? { ok: plan.newCollectionName.trim().length >= 3 && SAFE.test(plan.newCollectionName) && !colList.some(c => c.name.toLowerCase() === plan.newCollectionName.trim().toLowerCase()), label: 'New collection name valid', hint: '3–100 characters: letters, digits, spaces and _ . - ( ). It must not exist yet.' }
-      : { ok: Boolean(collection) && colMatch(collection) !== false, label: collection ? `Collection: ${collection.name}` : 'Existing collection selected', hint: collection && colMatch(collection) === false ? 'Its members differ from the selected servers.' : 'Choose a collection.' },
-    { ok: plan.deploymentName.trim().length >= 3 && SAFE.test(plan.deploymentName), label: 'Deployment name valid', hint: '3–100 characters: letters, digits, spaces and _ . - ( ).' },
-    { ok: !Number.isNaN(startMs) && endMs >= now + MIN_LEFT && startMs <= now + 30 * 86400_000, label: 'Maintenance window open ≥ 30 min, within 30 days', hint: 'Pick a later start or a longer window.' },
-    { ok: plan.deadlineMode === 'asap' || (!Number.isNaN(deadlineMs) && deadlineMs >= now - 60_000 && deadlineMs + MIN_LEFT <= endMs), label: plan.deadlineMode === 'asap' ? 'Deadline: as soon as possible' : 'Deadline inside the window', hint: 'The deadline must be in the future and ≥ 30 min before the window ends.' },
-    { ok: plan.changeTicket.trim().length >= 3, label: plan.changeTicket ? `Change ${plan.changeTicket}` : 'Change ticket', hint: CHANGE_API_ENABLED ? 'Create a change request or enter its number.' : 'Enter the approved change number.' },
-    { ok: plan.approver.trim().length >= 2 && plan.approvalReference.trim().length >= 2, label: 'Approver and approval reference', hint: 'Both are recorded on the deployment.' },
-    { ok: plan.confirmed, label: 'Readiness confirmed', hint: 'Tick the confirmation box.' },
   ]
-  const blocking = checks.filter(c => !c.ok)
-  const ready = blocking.length === 0 && !runBusy
+  const gates = {
+    servers: [
+      { ok: Boolean(plan.adJobId) && adAgeOk, label: ad.job ? `Server list from AD (${ad.result?.domain || 'domain'})` : 'Servers listed from AD', hint: ad.job ? 'The AD list is older than 24 hours; search AD again.' : 'Search AD and choose the servers.' },
+      { ok: plan.servers.length > 0 && plan.servers.length <= maxServers, label: `${plan.servers.length || 'No'} server${plan.servers.length === 1 ? '' : 's'} selected`, hint: plan.servers.length > maxServers ? `At most ${maxServers} servers per deployment.` : 'Select at least one server.' },
+      { ok: notReadySelected.length === 0 || plan.includeNotReady, label: notReadySelected.length ? `${notReadySelected.length} selected server${notReadySelected.length === 1 ? ' is' : 's are'} NOT READY` : 'Selected servers are READY or not checked yet', hint: 'Deselect them, or allow NOT READY servers.' },
+    ],
+    updates: [
+      { ok: Boolean(sug), label: sug ? `Update group: ${sug.name}` : 'Update group selected', hint: 'Choose a software update group.' },
+    ],
+    target: [
+      plan.collectionMode === 'new'
+        ? { ok: plan.newCollectionName.trim().length >= 3 && SAFE.test(plan.newCollectionName) && !colList.some(c => c.name.toLowerCase() === plan.newCollectionName.trim().toLowerCase()), label: 'New collection name valid', hint: 'Collection name: 3–100 characters (letters, digits, spaces and _ . - ( )); it must not exist yet.' }
+        : { ok: Boolean(collection) && colMatch(collection) !== false, label: collection ? `Collection: ${collection.name}` : 'Existing collection selected', hint: collection && colMatch(collection) === false ? 'Its members differ from the selected servers.' : 'Choose a collection.' },
+      { ok: plan.deploymentName.trim().length >= 3 && SAFE.test(plan.deploymentName), label: 'Deployment name valid', hint: 'Deployment name: 3–100 characters (letters, digits, spaces and _ . - ( )).' },
+      { ok: !Number.isNaN(startMs) && endMs >= now + MIN_LEFT && startMs <= now + 30 * 86400_000, label: 'Maintenance window open ≥ 30 min, within 30 days', hint: 'Pick a later start or a longer window.' },
+      { ok: plan.deadlineMode === 'asap' || (!Number.isNaN(deadlineMs) && deadlineMs >= now - 60_000 && deadlineMs + MIN_LEFT <= endMs), label: plan.deadlineMode === 'asap' ? 'Deadline: as soon as possible' : 'Deadline inside the window', hint: 'The deadline must be in the future and ≥ 30 min before the window ends.' },
+    ],
+    change: [
+      { ok: !changeNeeded || plan.changeTicket.trim().length >= 3, label: plan.changeTicket.trim() ? `Change ${plan.changeTicket.trim()}` : changeNeeded ? 'Change request for pre-prod / prod servers' : 'No change request needed (test servers)', hint: 'Raise a change request or enter its number.' },
+      { ok: plan.approver.trim().length >= 2 && plan.approvalReference.trim().length >= 2, label: 'Approver and approval reference', hint: 'Enter the approver and the approval reference; both are recorded on the deployment.' },
+    ],
+  }
+  const allChecks = [...platform, ...gates.servers, ...gates.updates, ...gates.target, ...gates.change]
+  const ready = allChecks.every(c => c.ok) && !runBusy
 
   const config = () => ({
     adJobId: plan.adJobId, servers: plan.servers, includeNotReady: plan.includeNotReady, sugId: String(plan.sugId), sugName: plan.sugName,
@@ -208,268 +228,324 @@ export default function DeployConsole({ status, run, user, onStart, onGoLive, on
     changeTicket: plan.changeTicket, approver: plan.approver, approvalReference: plan.approvalReference, chg: plan.chg,
   })
 
+  const STEPS = [
+    { key: 'servers', label: 'Servers', icon: 'fa-sitemap', summary: plan.servers.length ? `${plan.servers.length} selected${prodSelected.length ? ` · ${prodSelected.length} prod` : ''}` : 'From Active Directory' },
+    { key: 'updates', label: 'Update group', icon: 'fa-box-archive', summary: sug ? sug.name : 'Choose a SUG' },
+    { key: 'target', label: 'Collection & schedule', icon: 'fa-calendar-days', summary: Number.isNaN(startMs) ? 'Window' : `${fmtUtc(startMs).slice(5, 16)} UTC · ${plan.windowHours} h` },
+    { key: 'change', label: 'Change & approval', icon: 'fa-ticket', summary: plan.changeTicket.trim() || (changeNeeded ? 'Change required' : 'Test servers') },
+  ]
+  const stepIdx = Math.max(0, STEPS.findIndex(s => s.key === plan.step))
+  const step = STEPS[stepIdx]
+  const stepBlock = gates[step.key].find(c => !c.ok)
+  const goTo = (key) => { setReviewOpen(false); setPlan({ step: key }) }
+  const restartLabel = plan.restartMode === 'Script' ? 'Automatic restart' : plan.restartMode === 'Sccm' ? 'Restart by the SCCM client' : 'No restart'
+
   return (
-    <div className="wpx-deploy">
-      <div className="wpx-deploy-main">
-        {/* 1. Servers */}
-        <Card title="Servers from Active Directory" icon="fa-sitemap" kicker="Step 1">
-          <AdServerPicker
-            plan={plan} setPlan={setPlan} health={status.health} now={now} ad={ad} onSearch={searchAd}
-            readiness={readiness} readinessRows={serverRows} onCheck={runReadiness} onOpenReport={onOpenReport}
-          />
-          {notReadySelected.length > 0 && (
-            <label className="wpx-toggle-line">
-              <input type="checkbox" checked={plan.includeNotReady} onChange={e => setPlan({ includeNotReady: e.target.checked })} />
-              <span>Deploy to NOT READY servers anyway ({notReadySelected.map(r => shortHost(r.Server)).join(', ')})</span>
-            </label>
-          )}
-        </Card>
+    <div className="wpx-wizard">
+      {runBusy && (
+        <Banner toneName="live" icon="fa-satellite-dish" title="Your deployment is running" actions={<button type="button" className="wpx-btn wpx-btn-primary wpx-btn-sm" onClick={onGoLive}><i className="fa-solid fa-eye" /> View live</button>}>
+          You can prepare the next deployment; it can start when this one has finished.
+        </Banner>
+      )}
 
-        {/* 2. Update group */}
-        <Card
-          title="Software update group" icon="fa-box-archive" kicker="Step 2"
-          actions={<button type="button" className="wpx-btn wpx-btn-ghost wpx-btn-sm" onClick={sugs.refresh} disabled={sugs.loading}>{sugs.loading ? <Spinner /> : <i className="fa-solid fa-rotate" />} Refresh</button>}
-        >
-          {sugs.error && <Banner toneName="bad">{sugs.error}</Banner>}
-          <Select
-            inputId="wpx-sug" styles={selectStyles} isLoading={sugs.loading} placeholder="Search software update groups…"
-            options={sugList.map(s => ({ value: String(s.id), label: s.name, s }))}
-            value={sug ? { value: String(sug.id), label: sug.name, s: sug } : null}
-            onChange={(o) => setPlan({ sugId: o?.value || null, sugName: o?.label || '' })}
-            formatOptionLabel={(o, { context }) => (
-              <div className="wpx-sug-opt">
-                <span>{o.label}</span>
-                {context === 'menu' && <small>{o.s.kb_count ?? '—'} KBs · {o.s.update_count ?? '—'} updates{o.s.deployed ? ' · deployed before' : ''}</small>}
-              </div>
-            )}
-          />
-          {sugs.at && <div className="wpx-help">List from {fmtAgo(sugs.at, now)}.</div>}
-          {sug && (
-            <div className="wpx-sug-card">
-              <div className="wpx-sug-stats">
-                <div><strong>{sug.kb_count ?? '—'}</strong><span>KBs</span></div>
-                <div><strong>{sug.update_count ?? '—'}</strong><span>Updates</span></div>
-                <div className={sug.expired_count ? 'warn' : ''}><strong>{sug.expired_count ?? 0}</strong><span>Expired</span></div>
-                <div><strong>{sug.superseded_count ?? 0}</strong><span>Superseded</span></div>
-                <div><strong>{sug.modified_utc ? fmtAgo(sug.modified_utc, now) : '—'}</strong><span>Modified</span></div>
-              </div>
-              {sug.description && <p className="wpx-muted">{sug.description}</p>}
-              {sug.expired_count > 0 && <Banner toneName="warn">{sug.expired_count} expired update(s) in this group will not install.</Banner>}
-              <div className="wpx-kb-chips">
-                {asArray(sug.updates).slice(0, 24).map(u => <span key={u.ci_id || u.kb} className="wpx-kb wpx-kb-brand" title={u.title}>{u.kb}</span>)}
-                {asArray(sug.updates).length > 24 && <span className="wpx-kb">+{asArray(sug.updates).length - 24}</span>}
-              </div>
-            </div>
-          )}
-        </Card>
+      {/* Step bar */}
+      <nav className="wpx-steps" aria-label="Deployment steps">
+        {STEPS.map((s, i) => {
+          const ok = gates[s.key].every(c => c.ok)
+          return (
+            <button key={s.key} type="button" className={`wpx-stepbtn ${i === stepIdx ? 'active' : ''} ${ok ? 'ok' : ''}`} onClick={() => setPlan({ step: s.key })} aria-current={i === stepIdx ? 'step' : undefined} id={`wpx-step-${s.key}`}>
+              <span className="wpx-stepbtn-num">{ok && i !== stepIdx ? <i className="fa-solid fa-check" /> : i + 1}</span>
+              <span className="wpx-stepbtn-text"><strong>{s.label}</strong><small title={s.summary}>{s.summary}</small></span>
+            </button>
+          )
+        })}
+      </nav>
 
-        {/* 3. Collection */}
-        <Card title="Target collection" icon="fa-layer-group" kicker="Step 3">
-          <div className="wpx-seg" role="tablist">
-            <button type="button" className={plan.collectionMode === 'new' ? 'active' : ''} onClick={() => setPlan({ collectionMode: 'new' })}><i className="fa-solid fa-plus" /> Create new</button>
-            <button type="button" className={plan.collectionMode === 'existing' ? 'active' : ''} onClick={() => setPlan({ collectionMode: 'existing' })}><i className="fa-solid fa-list" /> Use existing</button>
-          </div>
-          {plan.collectionMode === 'new' ? (
-            <label className="wpx-field">
-              <span className="wpx-label">Collection name</span>
-              <input className="wpx-input" value={plan.newCollectionName} maxLength={100} onChange={e => setPlan({ newCollectionName: e.target.value, nameTouched: true })} />
-              <span className="wpx-help">Created in SCCM with exactly the {plan.servers.length} selected server{plan.servers.length === 1 ? '' : 's'}. Content goes to the configured distribution point group.</span>
-            </label>
-          ) : (
-            <div className="wpx-field">
-              <span className="wpx-label">Existing collection</span>
-              <Select
-                inputId="wpx-col" styles={selectStyles} isLoading={collections.loading} placeholder="Search device collections…"
-                options={colList.map(c => ({ value: c.id, label: c.name, c, isDisabled: colMatch(c) === false }))}
-                value={collection ? { value: collection.id, label: collection.name, c: collection } : null}
-                onChange={(o) => setPlan({ collectionId: o?.value || null, collectionName: o?.label || '' })}
-                formatOptionLabel={(o) => {
-                  const m = colMatch(o.c)
-                  return (
-                    <div className="wpx-sug-opt">
-                      <span>{o.label}</span>
-                      <small>{o.c.member_count} members{m === true ? ' · matches selection' : m === false ? ' · members differ' : ''}</small>
-                    </div>
-                  )
-                }}
-              />
-              <span className="wpx-help">The collection must contain exactly the selected servers.</span>
-              {collections.error && <Banner toneName="bad">{collections.error}</Banner>}
-            </div>
-          )}
-        </Card>
-
-        {/* 4. Schedule */}
-        <Card title="Schedule" icon="fa-calendar-days" kicker="Step 4">
-          <div className="wpx-grid-3">
-            <label className="wpx-field">
-              <span className="wpx-label">Window start (UTC)</span>
-              <input type="datetime-local" className="wpx-input" value={plan.windowStart} onChange={e => setPlan({ windowStart: e.target.value })} />
-            </label>
-            <label className="wpx-field">
-              <span className="wpx-label">Window length · {plan.windowHours} h</span>
-              <input type="range" min={1} max={24} value={plan.windowHours} className="wpx-range" onChange={e => setPlan({ windowHours: Number(e.target.value) })} />
-              <span className="wpx-help">6–8 h recommended for Windows Server 2025.</span>
-            </label>
-            <div className="wpx-field">
-              <span className="wpx-label">Restart</span>
-              <div className="wpx-seg wpx-seg-sm">
-                {[['Script', 'Automatic'], ['Sccm', 'SCCM client'], ['None', 'No restart']].map(([v, l]) => (
-                  <button key={v} type="button" className={plan.restartMode === v ? 'active' : ''} onClick={() => setPlan({ restartMode: v })}>{l}</button>
-                ))}
-              </div>
-            </div>
-          </div>
-          <div className="wpx-grid-2">
-            <div className="wpx-field">
-              <span className="wpx-label">Installation deadline</span>
-              <div className="wpx-seg wpx-seg-sm">
-                <button type="button" className={plan.deadlineMode === 'asap' ? 'active' : ''} onClick={() => setPlan({ deadlineMode: 'asap' })}>As soon as possible</button>
-                <button type="button" className={plan.deadlineMode === 'at' ? 'active' : ''} onClick={() => setPlan({ deadlineMode: 'at' })}>Specific time</button>
-              </div>
-            </div>
-            {plan.deadlineMode === 'at' && (
-              <label className="wpx-field">
-                <span className="wpx-label">Deadline (UTC)</span>
-                <input type="datetime-local" className="wpx-input" value={plan.deadline} onChange={e => setPlan({ deadline: e.target.value })} />
+      <div className="wpx-wizard-body">
+        {step.key === 'servers' && (
+          <Card title="Servers from Active Directory" icon="fa-sitemap">
+            <AdServerPicker
+              plan={plan} setPlan={setPlan} health={health} now={now} ad={ad} onSearch={searchAd}
+              readiness={readiness} readinessRows={serverRows} onCheck={runReadiness} onOpenReport={onOpenReport}
+            />
+            {notReadySelected.length > 0 && (
+              <label className="wpx-toggle-line">
+                <input type="checkbox" checked={plan.includeNotReady} onChange={e => setPlan({ includeNotReady: e.target.checked })} />
+                <span>Deploy to NOT READY servers anyway ({notReadySelected.map(r => shortHost(r.Server)).join(', ')})</span>
               </label>
             )}
-          </div>
-          <WindowBar now={now} start={startMs} end={endMs} deadline={deadlineMs} />
-          <div className="wpx-sched-facts">
-            <span><i className="fa-solid fa-door-open" /> Opens {fmtUtc(startMs)}</span>
-            <span><i className="fa-solid fa-download" /> Installs from {fmtUtc(installFrom)}</span>
-            <span><i className="fa-solid fa-door-closed" /> Closes {fmtUtc(endMs)}</span>
-          </div>
-        </Card>
+          </Card>
+        )}
 
-        {/* 5. Change and approval */}
-        <Card title="Change & approval" icon="fa-ticket" kicker="Step 5">
-          <div className="wpx-chg-row">
-            <label className="wpx-field">
-              <span className="wpx-label">Change ticket</span>
-              <input className="wpx-input wpx-input-mono" value={plan.changeTicket} placeholder="CHG0000000" maxLength={100} onChange={e => setPlan({ changeTicket: e.target.value, chg: null })} />
-            </label>
-            {CHANGE_API_ENABLED && (
-              <button type="button" className="wpx-btn wpx-btn-soft wpx-chg-btn" onClick={() => setChgOpen(true)} disabled={!plan.servers.length}>
-                <i className="fa-solid fa-plus" /> Create change
-              </button>
+        {step.key === 'updates' && (
+          <Card
+            title="Software update group" icon="fa-box-archive"
+            actions={<button type="button" className="wpx-btn wpx-btn-ghost wpx-btn-sm" onClick={sugs.refresh} disabled={sugs.loading}>{sugs.loading ? <Spinner /> : <i className="fa-solid fa-rotate" />} Refresh</button>}
+          >
+            {sugs.error && <Banner toneName="bad">{sugs.error}</Banner>}
+            <Select
+              inputId="wpx-sug" styles={selectStyles} isLoading={sugs.loading} placeholder="Search software update groups…"
+              options={sugList.map(s => ({ value: String(s.id), label: s.name, s }))}
+              value={sug ? { value: String(sug.id), label: sug.name, s: sug } : null}
+              onChange={(o) => setPlan({ sugId: o?.value || null, sugName: o?.label || '' })}
+              formatOptionLabel={(o, { context }) => (
+                <div className="wpx-sug-opt">
+                  <span>{o.label}</span>
+                  {context === 'menu' && <small>{o.s.kb_count ?? '—'} KBs · {o.s.update_count ?? '—'} updates{o.s.deployed ? ' · deployed before' : ''}</small>}
+                </div>
+              )}
+            />
+            {sugs.at && <div className="wpx-help">List from {fmtAgo(sugs.at, now)}.</div>}
+            {sug && (
+              <div className="wpx-sug-card">
+                <div className="wpx-sug-stats">
+                  <div><strong>{sug.kb_count ?? '—'}</strong><span>KBs</span></div>
+                  <div><strong>{sug.update_count ?? '—'}</strong><span>Updates</span></div>
+                  <div className={sug.expired_count ? 'warn' : ''}><strong>{sug.expired_count ?? 0}</strong><span>Expired</span></div>
+                  <div><strong>{sug.superseded_count ?? 0}</strong><span>Superseded</span></div>
+                  <div><strong>{sug.modified_utc ? fmtAgo(sug.modified_utc, now) : '—'}</strong><span>Modified</span></div>
+                </div>
+                {sug.description && <p className="wpx-muted">{sug.description}</p>}
+                {sug.expired_count > 0 && <Banner toneName="warn">{sug.expired_count} expired update(s) in this group will not install.</Banner>}
+                <div className="wpx-kb-chips">
+                  {asArray(sug.updates).slice(0, 24).map(u => <span key={u.ci_id || u.kb} className="wpx-kb wpx-kb-brand" title={u.title}>{u.kb}</span>)}
+                  {asArray(sug.updates).length > 24 && <span className="wpx-kb">+{asArray(sug.updates).length - 24}</span>}
+                </div>
+              </div>
             )}
-          </div>
-          {plan.chg && (
-            <div className="wpx-chg-linked">
-              <i className="fa-solid fa-link" />
-              <span><strong>{plan.chg.number}</strong> · {[plan.chg.type, plan.chg.state, plan.chg.approval].filter(Boolean).join(' · ')}</span>
-              <span className="wpx-muted">{plan.chg.shortDescription}</span>
+          </Card>
+        )}
+
+        {step.key === 'target' && (
+          <Card title="Collection & schedule" icon="fa-calendar-days">
+            <div className="wpx-form-section">
+              <div className="wpx-form-section-head">
+                <h4><i className="fa-solid fa-layer-group" /> Target collection</h4>
+                <div className="wpx-seg wpx-seg-sm" role="tablist">
+                  <button type="button" className={plan.collectionMode === 'new' ? 'active' : ''} onClick={() => setPlan({ collectionMode: 'new' })}><i className="fa-solid fa-plus" /> Create new</button>
+                  <button type="button" className={plan.collectionMode === 'existing' ? 'active' : ''} onClick={() => setPlan({ collectionMode: 'existing' })}><i className="fa-solid fa-list" /> Use existing</button>
+                </div>
+              </div>
+              <div className="wpx-grid-2">
+                {plan.collectionMode === 'new' ? (
+                  <label className="wpx-field">
+                    <span className="wpx-label">Collection name</span>
+                    <input className="wpx-input" value={plan.newCollectionName} maxLength={100} onChange={e => setPlan({ newCollectionName: e.target.value, nameTouched: true })} />
+                    <span className="wpx-help">Created in SCCM with exactly the {plan.servers.length} selected server{plan.servers.length === 1 ? '' : 's'}.</span>
+                  </label>
+                ) : (
+                  <div className="wpx-field">
+                    <span className="wpx-label">Existing collection</span>
+                    <Select
+                      inputId="wpx-col" styles={selectStyles} isLoading={collections.loading} placeholder="Search device collections…"
+                      options={colList.map(c => ({ value: c.id, label: c.name, c, isDisabled: colMatch(c) === false }))}
+                      value={collection ? { value: collection.id, label: collection.name, c: collection } : null}
+                      onChange={(o) => setPlan({ collectionId: o?.value || null, collectionName: o?.label || '' })}
+                      formatOptionLabel={(o) => {
+                        const m = colMatch(o.c)
+                        return (
+                          <div className="wpx-sug-opt">
+                            <span>{o.label}</span>
+                            <small>{o.c.member_count} members{m === true ? ' · matches selection' : m === false ? ' · members differ' : ''}</small>
+                          </div>
+                        )
+                      }}
+                    />
+                    <span className="wpx-help">Must contain exactly the selected servers.</span>
+                    {collections.error && <Banner toneName="bad">{collections.error}</Banner>}
+                  </div>
+                )}
+                <label className="wpx-field">
+                  <span className="wpx-label">Deployment name</span>
+                  <input className="wpx-input" value={plan.deploymentName} maxLength={100} onChange={e => setPlan({ deploymentName: e.target.value, deploymentTouched: true })} id="wpx-deployment-name" />
+                  <span className="wpx-help">Shown in SCCM Monitoring → Deployments.</span>
+                </label>
+              </div>
             </div>
-          )}
-          <div className="wpx-grid-3">
-            <label className="wpx-field">
-              <span className="wpx-label">Approver</span>
-              <input className="wpx-input" value={plan.approver} maxLength={100} onChange={e => setPlan({ approver: e.target.value })} />
-            </label>
-            <label className="wpx-field">
-              <span className="wpx-label">Approval reference</span>
-              <input className="wpx-input" value={plan.approvalReference} maxLength={200} onChange={e => setPlan({ approvalReference: e.target.value })} />
-            </label>
-            <label className="wpx-field">
-              <span className="wpx-label">Extra KBs to validate (optional)</span>
-              <input className="wpx-input wpx-input-mono" value={plan.kbsText} placeholder="KB5066835, KB890830" onChange={e => setPlan({ kbsText: e.target.value })} />
-            </label>
-          </div>
-        </Card>
+
+            <div className="wpx-form-section">
+              <div className="wpx-form-section-head"><h4><i className="fa-solid fa-calendar-check" /> Maintenance window</h4></div>
+              <div className="wpx-sched-grid">
+                <label className="wpx-field">
+                  <span className="wpx-label">Window start (UTC)</span>
+                  <input type="datetime-local" className="wpx-input" value={plan.windowStart} onChange={e => setPlan({ windowStart: e.target.value })} />
+                </label>
+                <label className="wpx-field">
+                  <span className="wpx-label">Length · {plan.windowHours} h</span>
+                  <input type="range" min={1} max={24} value={plan.windowHours} className="wpx-range" onChange={e => setPlan({ windowHours: Number(e.target.value) })} />
+                </label>
+                <div className="wpx-field">
+                  <span className="wpx-label">Installation deadline</span>
+                  <div className="wpx-seg wpx-seg-sm">
+                    <button type="button" className={plan.deadlineMode === 'asap' ? 'active' : ''} onClick={() => setPlan({ deadlineMode: 'asap' })}>As soon as possible</button>
+                    <button type="button" className={plan.deadlineMode === 'at' ? 'active' : ''} onClick={() => setPlan({ deadlineMode: 'at' })}>Specific time</button>
+                  </div>
+                </div>
+                {plan.deadlineMode === 'at' && (
+                  <label className="wpx-field">
+                    <span className="wpx-label">Deadline (UTC)</span>
+                    <input type="datetime-local" className="wpx-input" value={plan.deadline} onChange={e => setPlan({ deadline: e.target.value })} />
+                  </label>
+                )}
+                <div className="wpx-field">
+                  <span className="wpx-label">Restart</span>
+                  <div className="wpx-seg wpx-seg-sm">
+                    {[['Script', 'Automatic'], ['Sccm', 'SCCM client'], ['None', 'No restart']].map(([v, l]) => (
+                      <button key={v} type="button" className={plan.restartMode === v ? 'active' : ''} onClick={() => setPlan({ restartMode: v })}>{l}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <WindowBar now={now} start={startMs} end={endMs} deadline={deadlineMs} />
+              <div className="wpx-sched-facts">
+                <span><i className="fa-solid fa-door-open" /> Opens {fmtUtc(startMs)}</span>
+                <span><i className="fa-solid fa-download" /> Installs from {fmtUtc(installFrom)}</span>
+                <span><i className="fa-solid fa-door-closed" /> Closes {fmtUtc(endMs)}</span>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {step.key === 'change' && (
+          <Card title="Change & approval" icon="fa-ticket">
+            {changeNeeded ? (
+              <Banner toneName="warn" icon="fa-shield-halved" title={`Change request required: ${prodSelected.length} pre-prod / production server${prodSelected.length === 1 ? '' : 's'}`}>
+                {prodSelected.map(shortHost).join(', ')}. Enter the approved change number, or raise a change request here.
+              </Banner>
+            ) : (
+              <Banner toneName="good" icon="fa-flask" title="Test servers only">No change request is needed for these servers. You can still record one.</Banner>
+            )}
+            <div className="wpx-chg-row">
+              <label className="wpx-field">
+                <span className="wpx-label">Change request{changeNeeded ? '' : ' (optional)'}</span>
+                <input className="wpx-input wpx-input-mono" value={plan.changeTicket}  maxLength={100} onChange={e => setPlan({ changeTicket: e.target.value, chg: null })} id="wpx-change" />
+              </label>
+              <button type="button" className="wpx-btn wpx-btn-soft wpx-chg-btn" onClick={() => setChgOpen(true)} disabled={!plan.servers.length} id="btn-raise-change">
+                <i className="fa-solid fa-plus" /> Raise change request
+              </button>
+            </div>
+            {plan.chg && (
+              <div className="wpx-chg-linked">
+                <i className="fa-solid fa-link" />
+                <span><strong>{plan.chg.number}</strong> · {[plan.chg.type, plan.chg.state, plan.chg.approval].filter(Boolean).join(' · ')}</span>
+                <span className="wpx-muted">{plan.chg.shortDescription}</span>
+              </div>
+            )}
+            <div className="wpx-grid-3">
+              <label className="wpx-field">
+                <span className="wpx-label">Approver</span>
+                <input className="wpx-input" value={plan.approver} maxLength={100} onChange={e => setPlan({ approver: e.target.value })} id="wpx-approver" />
+              </label>
+              <label className="wpx-field">
+                <span className="wpx-label">Approval reference</span>
+                <input className="wpx-input" value={plan.approvalReference} maxLength={200} onChange={e => setPlan({ approvalReference: e.target.value })} id="wpx-approval-ref" />
+              </label>
+              <label className="wpx-field">
+                <span className="wpx-label">Extra KBs to validate (optional)</span>
+                <input className="wpx-input wpx-input-mono" value={plan.kbsText} placeholder="Comma separated" onChange={e => setPlan({ kbsText: e.target.value })} />
+              </label>
+            </div>
+          </Card>
+        )}
       </div>
 
-      {/* Summary + one-click */}
-      <aside className="wpx-deploy-side">
-        <div className="wpx-summary">
-          <div className="wpx-summary-head">
-            <div className="wpx-summary-kicker"><i className="fa-solid fa-bolt" /> One-click deployment</div>
-            <label className="wpx-field">
-              <span className="wpx-label">Deployment name</span>
-              <input className="wpx-input" value={plan.deploymentName} maxLength={100} onChange={e => setPlan({ deploymentName: e.target.value, deploymentTouched: true })} />
-            </label>
-          </div>
-          <div className="wpx-summary-facts">
-            <div><span>Servers</span><strong>{plan.servers.length}</strong></div>
-            <div><span>KBs</span><strong>{sug?.kb_count ?? '—'}</strong></div>
-            <div><span>Window</span><strong>{plan.windowHours} h</strong></div>
-          </div>
-          <ul className="wpx-summary-list">
-            <li><i className="fa-solid fa-box-archive" /><span>{sug?.name || 'No update group'}</span></li>
-            <li><i className="fa-solid fa-layer-group" /><span>{plan.collectionMode === 'new' ? `New: ${plan.newCollectionName || '—'}` : collection?.name || 'No collection'}</span></li>
-            <li><i className="fa-solid fa-calendar" /><span>{fmtUtc(startMs)} → {fmtUtc(endMs).slice(11)}</span></li>
-            <li><i className="fa-solid fa-flag-checkered" /><span>{plan.deadlineMode === 'asap' ? 'Deadline as soon as possible' : `Deadline ${fmtUtc(deadlineMs)}`}</span></li>
-            <li><i className="fa-solid fa-power-off" /><span>Restart: {plan.restartMode === 'Script' ? 'automatic' : plan.restartMode === 'Sccm' ? 'by SCCM client' : 'none'}</span></li>
-            <li><i className="fa-solid fa-ticket" /><span>{plan.changeTicket || 'No change ticket'}</span></li>
-          </ul>
-
-          <div className="wpx-flow">
-            {['Environment', 'Readiness', 'Deploy', 'Install', 'Restart', 'Validate', 'Report'].map((s, i) => (
-              <React.Fragment key={s}>{i > 0 && <i className="fa-solid fa-chevron-right" />}<span>{s}</span></React.Fragment>
-            ))}
-          </div>
-
-          <ul className="wpx-gates">
-            {checks.map((c, i) => (
-              <li key={i} className={c.ok ? 'ok' : 'bad'} title={c.ok ? '' : c.hint}>
-                <i className={`fa-solid ${c.ok ? 'fa-circle-check' : 'fa-circle-xmark'}`} />
-                <span>{c.label}</span>
-              </li>
-            ))}
-          </ul>
-
-          <label className="wpx-confirm">
-            <input type="checkbox" checked={plan.confirmed} onChange={e => setPlan({ confirmed: e.target.checked })} />
-            <span>DP content, client health, maintenance window and approvals are verified.</span>
-          </label>
-
-          {runBusy ? (
-            <button type="button" className="wpx-btn wpx-btn-hero" onClick={onGoLive}>
-              <i className="fa-solid fa-satellite-dish" /> View live deployment
-            </button>
-          ) : (
-            <button type="button" className="wpx-btn wpx-btn-hero" disabled={!ready} onClick={() => setConfirmOpen(true)} id="btn-one-click-deploy">
-              <i className="fa-solid fa-rocket" /> Deploy now
-            </button>
-          )}
-          {!ready && !runBusy && blocking[0] && <div className="wpx-summary-hint"><i className="fa-solid fa-circle-info" /> {blocking[0].hint || blocking[0].label}</div>}
-          {locked && (
-            <div className="wpx-summary-hint warn"><i className="fa-solid fa-lock" /> {status.active.message}</div>
-          )}
+      {/* Step navigation */}
+      <div className="wpx-wizard-foot">
+        <button type="button" className="wpx-btn wpx-btn-ghost" onClick={() => setPlan({ step: STEPS[stepIdx - 1].key })} disabled={stepIdx === 0}>
+          <i className="fa-solid fa-arrow-left" /> Back
+        </button>
+        <div className={`wpx-wizard-hint ${stepBlock ? '' : 'ok'}`}>
+          {stepBlock ? <><i className="fa-solid fa-circle-info" /> {stepBlock.hint || stepBlock.label}</> : <><i className="fa-solid fa-circle-check" /> {step.label} complete</>}
         </div>
-      </aside>
+        {stepIdx < STEPS.length - 1 ? (
+          <button type="button" className="wpx-btn wpx-btn-primary" onClick={() => setPlan({ step: STEPS[stepIdx + 1].key })} id="btn-next-step">
+            Next: {STEPS[stepIdx + 1].label} <i className="fa-solid fa-arrow-right" />
+          </button>
+        ) : (
+          <button type="button" className="wpx-btn wpx-btn-hero wpx-btn-review" onClick={() => { setPlan({ confirmed: false }); setReviewOpen(true) }} id="btn-review" disabled={runBusy}>
+            <i className="fa-solid fa-rocket" /> Review &amp; deploy
+          </button>
+        )}
+      </div>
 
       {chgOpen && (
         <ChangeTicketModal
           plan={{ sugName: plan.sugName, servers: plan.servers, windowStartUtc: toUtcIso(plan.windowStart), windowHours: plan.windowHours }}
-          requester={user}
           onClose={() => setChgOpen(false)}
-          onCreated={(t) => setPlan(p => ({ chg: t, changeTicket: t.number, approvalReference: p.approvalReference || (t.approval ? `${t.number} (${t.approval})` : t.number) }))}
+          onCreated={(t) => setPlan({ chg: t, changeTicket: t.number })}
         />
       )}
 
-      {confirmOpen && (
+      {/* One-click deployment: review everything, confirm, deploy */}
+      {reviewOpen && (
         <Modal
-          title="Deploy updates now?" icon="fa-rocket" toneName="brand" onClose={() => setConfirmOpen(false)}
+          title="Review and deploy" icon="fa-rocket" toneName="brand" wide onClose={() => setReviewOpen(false)}
           footer={<>
-            <button type="button" className="wpx-btn wpx-btn-ghost" onClick={() => setConfirmOpen(false)} autoFocus>Cancel</button>
-            <button type="button" className="wpx-btn wpx-btn-primary" id="btn-confirm-deploy" onClick={() => { setConfirmOpen(false); onStart(config()) }}>
-              <i className="fa-solid fa-rocket" /> Deploy
+            <button type="button" className="wpx-btn wpx-btn-ghost" onClick={() => setReviewOpen(false)}>Cancel</button>
+            <button type="button" className="wpx-btn wpx-btn-primary" id="btn-confirm-deploy" disabled={!ready || !plan.confirmed} onClick={() => { setReviewOpen(false); onStart(config()) }}>
+              <i className="fa-solid fa-rocket" /> Deploy now
             </button>
           </>}
         >
-          <p className="wpx-modal-lead">
-            This runs the environment and readiness checks, then creates a <strong>Required</strong> deployment.
-            Updates install from <strong>{fmtUtc(installFrom)}</strong> inside the window and the servers restart{plan.restartMode === 'None' ? ' only if you restart them' : ''}.
-          </p>
-          <div className="wpx-confirm-grid">
-            <div><span>Deployment</span><strong>{plan.deploymentName}</strong></div>
-            <div><span>Update group</span><strong>{sug?.name}</strong></div>
-            <div><span>Collection</span><strong>{plan.collectionMode === 'new' ? `${plan.newCollectionName} (new)` : collection?.name}</strong></div>
-            <div><span>Change</span><strong>{plan.changeTicket}</strong></div>
-            <div><span>Window</span><strong>{fmtUtc(startMs)} – {fmtUtc(endMs).slice(11)}</strong></div>
-            <div><span>Servers</span><strong>{plan.servers.map(shortHost).join(', ')}</strong></div>
+          <div className="wpx-review">
+            <div className="wpx-review-grid">
+              <section className="wpx-review-sec wpx-review-wide">
+                <header><h4><i className="fa-solid fa-server" /> Servers ({plan.servers.length})</h4><button type="button" className="wpx-link" onClick={() => goTo('servers')}>Edit</button></header>
+                <div className="wpx-review-servers">
+                  {plan.servers.length ? plan.servers.map(s => {
+                    const r = serverRows.find(x => shortName(x.Server) === shortName(s))
+                    return (
+                      <span key={s} className="wpx-review-srv" title={s}>
+                        <i className="fa-brands fa-windows" /><strong>{shortHost(s)}</strong>
+                        <EnvTag env={envOf(s)} />
+                        {r && <StatusPill status={r.Overall} size="sm" />}
+                      </span>
+                    )
+                  }) : <span className="wpx-muted">None selected</span>}
+                </div>
+              </section>
+              <section className="wpx-review-sec">
+                <header><h4><i className="fa-solid fa-box-archive" /> Update group</h4><button type="button" className="wpx-link" onClick={() => goTo('updates')}>Edit</button></header>
+                <strong>{sug?.name || '—'}</strong>
+                {sug && <small>{sug.kb_count ?? '—'} KBs · {sug.update_count ?? '—'} updates</small>}
+              </section>
+              <section className="wpx-review-sec">
+                <header><h4><i className="fa-solid fa-layer-group" /> Collection &amp; deployment</h4><button type="button" className="wpx-link" onClick={() => goTo('target')}>Edit</button></header>
+                <strong>{plan.collectionMode === 'new' ? `${plan.newCollectionName || '—'} (new)` : collection?.name || '—'}</strong>
+                <small>{plan.deploymentName || '—'}</small>
+              </section>
+              <section className="wpx-review-sec">
+                <header><h4><i className="fa-solid fa-calendar-check" /> Schedule</h4><button type="button" className="wpx-link" onClick={() => goTo('target')}>Edit</button></header>
+                <strong>{fmtUtc(startMs)} – {Number.isNaN(endMs) ? '—' : fmtUtc(endMs).slice(11)}</strong>
+                <small>Installs from {fmtUtc(installFrom)} · {restartLabel}</small>
+              </section>
+              <section className="wpx-review-sec">
+                <header><h4><i className="fa-solid fa-ticket" /> Change &amp; approval</h4><button type="button" className="wpx-link" onClick={() => goTo('change')}>Edit</button></header>
+                <strong>{plan.changeTicket.trim() || (changeNeeded ? 'Missing' : 'Not required (test servers)')}</strong>
+                <small>Approver {plan.approver || '—'} · {plan.approvalReference || '—'}</small>
+              </section>
+            </div>
+
+            <div className="wpx-flow">
+              {['Environment', 'Readiness', 'Collection', 'Content', 'Window', 'Deploy', 'Install', 'Restart', 'Validate', 'Report'].map((s, i) => (
+                <React.Fragment key={s}>{i > 0 && <i className="fa-solid fa-chevron-right" />}<span>{s}</span></React.Fragment>
+              ))}
+            </div>
+
+            <ul className="wpx-gates wpx-gates-2col">
+              {allChecks.map((c, i) => (
+                <li key={i} className={c.ok ? 'ok' : 'bad'} title={c.ok ? '' : c.hint}>
+                  <i className={`fa-solid ${c.ok ? 'fa-circle-check' : 'fa-circle-xmark'}`} />
+                  <span>{c.ok ? c.label : c.hint || c.label}</span>
+                </li>
+              ))}
+            </ul>
+
+            {locked && <Banner toneName="warn" icon="fa-lock">{status.active.message}</Banner>}
+            <label className="wpx-confirm wpx-review-confirm">
+              <input type="checkbox" checked={plan.confirmed} onChange={e => setPlan({ confirmed: e.target.checked })} id="wpx-confirm-box" />
+              <span>I checked DP content, client health, the maintenance window and the approvals. Deploy <strong>{plan.deploymentName || 'this deployment'}</strong> as a Required deployment to {plan.servers.length} server{plan.servers.length === 1 ? '' : 's'}.</span>
+            </label>
           </div>
         </Modal>
       )}

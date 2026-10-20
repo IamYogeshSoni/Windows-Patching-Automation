@@ -58,6 +58,28 @@ export function serverStatesFromLog(lines) {
   return states
 }
 
+/* State changes per server over time: { fqdn: [{ state, detail, time }] } (consecutive repeats merged) */
+export function serverTimelineFromLog(lines) {
+  const out = {}
+  const push = (fqdn, state, detail, time) => {
+    const key = fqdn.toLowerCase()
+    const list = out[key] || (out[key] = [])
+    const last = list[list.length - 1]
+    if (last && last.state === state) { last.detail = detail; return }
+    list.push({ state, detail, time })
+  }
+  for (const entry of lines) {
+    const text = String(entry.line || '')
+    let m = text.match(STATUS_LINE)
+    if (m) { push(m[1], m[2], (m[3] || '').trim(), entry.time); continue }
+    m = text.match(RESTARTING)
+    if (m) { push(m[1], 'RESTARTING', 'Restart in progress', entry.time); continue }
+    m = text.match(BACK_ONLINE)
+    if (m) push(m[1], 'RESTARTED', 'Back online', entry.time)
+  }
+  return out
+}
+
 /* ══════════════════════════════════════════════════════════════════
    useJobStream — follow one job: full log, then live updates.
 ══════════════════════════════════════════════════════════════════ */
@@ -143,7 +165,7 @@ export function buildDeploymentBody(config, precheckJobId, includeNotReady) {
     ...(config.deadlineMode === 'at' && config.deadlineUtc && { deadline_utc: config.deadlineUtc }),
     restart_mode: config.restartMode,
     ...(config.kbs?.length && { kb: config.kbs }),
-    change_ticket: config.changeTicket.trim(),
+    ...(config.changeTicket?.trim() && { change_ticket: config.changeTicket.trim() }),
     approver: config.approver.trim(),
     approval_reference: config.approvalReference.trim(),
     readiness_confirmed: true,
@@ -177,7 +199,7 @@ export function useOneClickRun() {
       appendLines(stage, batch)
       setRun(r => ({ ...r, cursors: { ...r.cursors, [stage]: cursor } }))
     } })
-    setRun(r => ({ ...r, results: { ...r.results, [stage]: { job_id: job.job_id, status: job.status, headline: job.result?.report_headline, finished_at: job.finished_at } } }))
+    setRun(r => ({ ...r, results: { ...r.results, [stage]: { job_id: job.job_id, status: job.status, headline: job.result?.report_headline, started_at: job.started_at || job.created_at, finished_at: job.finished_at } } }))
     return job
   }
 

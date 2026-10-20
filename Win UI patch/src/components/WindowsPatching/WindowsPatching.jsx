@@ -1,21 +1,23 @@
 import React, { useCallback, useState } from 'react'
 import './WindowsPatching.css'
 import {
-  BASE_URL, asArray, connectionTest, describeError, getUserName, newIdempotencyKey, pollJob,
-  releaseLock, resumeDeployment, setUserName,
+  BASE_URL, asArray, connectionTest, describeError, newIdempotencyKey, pollJob,
+  releaseLock, resumeDeployment,
 } from '../../api/sccmApi'
 import { usePlatformStatus, useOneClickRun, useJobStream } from './hooks'
-import { Banner, Modal, Spinner, StatusPill, shortHost } from './ui'
+import { Banner, Modal, Spinner, StatusPill } from './ui'
 import DeployConsole from './DeployConsole'
 import LiveMonitor from './LiveMonitor'
 import ReportsCenter from './ReportsCenter'
 import ActivityView from './ActivityView'
+import Dashboard from './Dashboard'
 
 const TABS = [
-  { key: 'deploy', label: 'Deploy', icon: 'fa-rocket' },
-  { key: 'live', label: 'Live', icon: 'fa-satellite-dish' },
-  { key: 'reports', label: 'Reports', icon: 'fa-chart-pie' },
-  { key: 'activity', label: 'Activity', icon: 'fa-shield-halved' },
+  { key: 'deploy', label: 'Deploy' },
+  { key: 'live', label: 'Live' },
+  { key: 'dashboard', label: 'Dashboard' },
+  { key: 'reports', label: 'Reports' },
+  { key: 'activity', label: 'Activity' },
 ]
 const TAB_KEY = 'nova-wp-tab'
 
@@ -25,7 +27,6 @@ export default function WindowsPatching() {
   const { run } = oneClick
   const [tab, setTabState] = useState(() => { try { return localStorage.getItem(TAB_KEY) || 'deploy' } catch { return 'deploy' } })
   const setTab = (t) => { setTabState(t); try { localStorage.setItem(TAB_KEY, t) } catch { /* unavailable */ } }
-  const [user, setUser] = useState(getUserName)
   const [selectedReport, setSelectedReport] = useState(null)
   const [reportsRefresh, setReportsRefresh] = useState(0)
   const [actionError, setActionError] = useState(null)
@@ -45,6 +46,8 @@ export default function WindowsPatching() {
     setReportsRefresh(n => n + 1)
   }, [oneClick.markFinished, status.refresh]) // eslint-disable-line react-hooks/exhaustive-deps
   const stream = useJobStream(watchId, { onFinal })
+  // The lock is taken when the deployment job is created: show it at once
+  React.useEffect(() => { if (run.jobs?.deployment) status.refresh() }, [run.jobs?.deployment]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const openReport = (jobId) => { setSelectedReport(jobId); setReportsRefresh(n => n + 1); setTab('reports') }
 
@@ -76,49 +79,29 @@ export default function WindowsPatching() {
 
   return (
     <div className="wpx-root">
-      {/* ── Hero header ── */}
-      <header className="wpx-hero">
-        <div className="wpx-hero-art" aria-hidden="true">
-          <span className="wpx-orb wpx-orb-1" /><span className="wpx-orb wpx-orb-2" /><span className="wpx-hero-grid" />
-        </div>
-        <div className="wpx-hero-row">
-          <div className="wpx-hero-brand">
-            <span className="wpx-hero-logo"><i className="fa-brands fa-windows" /></span>
-            <div>
-              <div className="wpx-hero-kicker">NOVA · Unified Patching</div>
-              <h1>Windows Patching</h1>
-              <p>Readiness, one-click SCCM deployment, live tracking and reports — in one place.</p>
-            </div>
+      <header className="wpx-header">
+        <div className="wpx-header-row">
+          <h1><i className="fa-brands fa-windows" /> Windows Patching</h1>
+          <div className="wpx-header-status">
+            <span className={`wpx-status wpx-status-${status.api === 'up' ? 'good' : status.api === 'loading' ? 'neutral' : 'bad'}`} title={status.error || BASE_URL}>
+              <span className="wpx-status-dot" />{status.api === 'loading' ? 'Connecting' : status.api === 'up' ? 'API online' : 'API offline'}
+            </span>
+            {status.health && (
+              <span className={`wpx-status wpx-status-${status.health.deployment_enabled === false ? 'bad' : 'good'}`}>
+                <span className="wpx-status-dot" />Deployments {status.health.deployment_enabled === false ? 'disabled' : 'enabled'}
+              </span>
+            )}
+            <span className={`wpx-status wpx-status-${locked ? 'warn' : 'neutral'}`}>
+              <span className="wpx-status-dot" />{locked ? `Deployment running${lockInfo?.requested_by ? ` (${lockInfo.requested_by})` : ''}` : 'No deployment running'}
+            </span>
+            <button type="button" className="wpx-btn wpx-btn-ghost wpx-btn-sm" onClick={() => setConnOpen(true)}>Test connection</button>
           </div>
-          <div className="wpx-hero-side">
-            <UserChip user={user} onChange={(n) => { setUserName(n); setUser(n) }} />
-            <button type="button" className="wpx-btn wpx-btn-glass" onClick={() => setConnOpen(true)}><i className="fa-solid fa-plug" /> Test connection</button>
-          </div>
         </div>
-        <div className="wpx-hero-chips">
-          <span className={`wpx-hchip wpx-hchip-${status.api}`} title={status.error || `${BASE_URL}`}>
-            <span className="wpx-hchip-dot" />{status.api === 'loading' ? 'Connecting…' : status.api === 'up' ? 'API online' : 'API offline'}
-          </span>
-          <span className={`wpx-hchip ${status.health?.deployment_enabled === false ? 'wpx-hchip-down' : 'wpx-hchip-up'}`}>
-            <i className="fa-solid fa-rocket" /> Deployments {status.health?.deployment_enabled === false ? 'disabled' : 'enabled'}
-          </span>
-          {status.health?.sccm_site_code && (
-            <span className="wpx-hchip" title={status.health.sccm_site_server}><i className="fa-solid fa-sitemap" /> SCCM site {status.health.sccm_site_code}</span>
-          )}
-          {status.health?.jumphost && (
-            <span className="wpx-hchip" title="Jumphost"><i className="fa-solid fa-server" /> {shortHost(status.health.jumphost)}</span>
-          )}
-          {status.health?.target_server_account && <span className="wpx-hchip"><i className="fa-solid fa-user-shield" /> {status.health.target_server_account}</span>}
-          <span className={`wpx-hchip ${locked ? 'wpx-hchip-busy' : ''}`}>
-            <i className={`fa-solid ${locked ? 'fa-lock' : 'fa-lock-open'}`} /> {locked ? `Locked by ${lockInfo?.requested_by || 'a deployment'}` : 'No deployment running'}
-          </span>
-        </div>
-
         <nav className="wpx-tabs" role="tablist" aria-label="Windows patching">
           {TABS.map(t => (
             <button key={t.key} type="button" role="tab" aria-selected={tab === t.key} className={`wpx-tab ${tab === t.key ? 'active' : ''}`} onClick={() => setTab(t.key)} id={`wpx-tab-${t.key}`}>
-              <i className={`fa-solid ${t.icon}`} /> {t.label}
-              {t.key === 'live' && liveBusy && <span className="wpx-tab-live" />}
+              {t.label}
+              {t.key === 'live' && liveBusy && <span className="wpx-tab-live" aria-label="running" />}
             </button>
           ))}
         </nav>
@@ -126,8 +109,8 @@ export default function WindowsPatching() {
 
       <main className="wpx-content">
         {locked && !ownDeployment && tab !== 'live' && lockInfo && (
-          <Banner toneName="live" icon="fa-satellite-dish" title={`Deployment in progress by ${lockInfo.requested_by}`} actions={
-            <button type="button" className="wpx-btn wpx-btn-primary wpx-btn-sm" onClick={() => setTab('live')}><i className="fa-solid fa-eye" /> Watch live</button>
+          <Banner toneName="live" icon="fa-circle-info" title={lockInfo.requested_by ? `Deployment in progress by ${lockInfo.requested_by}` : 'A deployment is in progress'} actions={
+            <button type="button" className="wpx-btn wpx-btn-primary wpx-btn-sm" onClick={() => setTab('live')}>Watch live</button>
           }>
             <strong>{lockInfo.deployment_name || 'Deployment'}</strong> · <StatusPill status={lockInfo.status} size="sm" /> {lockInfo.latest_log_line && <span className="wpx-banner-quote">{lockInfo.latest_log_line}</span>}
           </Banner>
@@ -135,7 +118,7 @@ export default function WindowsPatching() {
         {actionError && <Banner toneName="bad" actions={<button type="button" className="wpx-icon-btn" onClick={() => setActionError(null)} aria-label="Dismiss"><i className="fa-solid fa-xmark" /></button>}>{actionError}</Banner>}
 
         {tab === 'deploy' && (
-          <DeployConsole status={status} run={run} user={user} onStart={startDeployment} onGoLive={() => setTab('live')} onOpenReport={openReport} />
+          <DeployConsole status={status} run={run} onStart={startDeployment} onGoLive={() => setTab('live')} onOpenReport={openReport} />
         )}
         {tab === 'live' && (
           <LiveMonitor
@@ -145,31 +128,12 @@ export default function WindowsPatching() {
           />
         )}
         {tab === 'reports' && <ReportsCenter selectedId={selectedReport} onSelect={setSelectedReport} refreshKey={reportsRefresh} />}
+        {tab === 'dashboard' && <Dashboard onOpenReport={openReport} refreshKey={reportsRefresh} />}
         {tab === 'activity' && <ActivityView onOpenReport={openReport} />}
       </main>
 
       {connOpen && <ConnectionTestModal onClose={() => setConnOpen(false)} />}
     </div>
-  )
-}
-
-function UserChip({ user, onChange }) {
-  const [editing, setEditing] = useState(!user)
-  const [value, setValue] = useState(user)
-  if (editing) {
-    return (
-      <form className="wpx-user-edit" onSubmit={(e) => { e.preventDefault(); if (!value.trim()) return; onChange(value.trim()); setEditing(false) }}>
-        <input value={value} onChange={e => setValue(e.target.value)} maxLength={100} autoFocus={Boolean(user)} placeholder="Enter your name" aria-label="Your display name" />
-        <button type="submit" className="wpx-icon-btn" aria-label="Save"><i className="fa-solid fa-check" /></button>
-      </form>
-    )
-  }
-  return (
-    <button type="button" className="wpx-user" onClick={() => { setValue(user); setEditing(true) }} title="Your name is recorded on every action">
-      <span className="wpx-user-avatar">{user.split(/\s+/).map(p => p[0]).join('').slice(0, 2).toUpperCase()}</span>
-      <span className="wpx-user-name"><small>Signed in as</small>{user}</span>
-      <i className="fa-solid fa-pen" />
-    </button>
   )
 }
 

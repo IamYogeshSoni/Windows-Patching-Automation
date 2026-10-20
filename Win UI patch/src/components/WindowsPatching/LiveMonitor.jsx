@@ -4,6 +4,8 @@ import { STAGES, deployStageFromLog, serverStatesFromLog, shortName } from './ho
 import { Banner, Card, Empty, Modal, Spinner, StatusPill, fmtDuration, fmtUtc, parseTime, shortHost, tone, useNow } from './ui'
 import LiveLog from './LiveLog'
 import ReportView from './ReportViews'
+import JourneyView from './JourneyView'
+import EvidenceButton from './EvidenceButton'
 
 const STAGE_LABELS = { environment: 'Environment check', prerequisites: 'Readiness checks' }
 
@@ -34,13 +36,25 @@ export default function LiveMonitor({
     return 0
   }, [deploying, final, job?.status, lines, run.stage]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const stageFailed = (ownRun && run.phase === 'error') || (final && ['FAILED', 'OUTCOME_UNKNOWN'].includes(job.status))
   const servers = asArray(job?.request?.Servers || run.config?.servers)
   const states = useMemo(() => serverStatesFromLog(lines), [lines])
   const verdicts = Object.fromEntries(asArray(job?.result?.servers).map(s => [shortName(s.Server), s]))
   const waiting = [...lines].reverse().find(l => /Waiting for (the maintenance window|the deployment deadline)/.test(l.line))
   const lastLine = [...lines].reverse().find(l => l.line?.trim())
   const waitingActive = waiting && lastLine === waiting
+
+  /* Pre-flight checks of our own one-click run, for the journey */
+  const preflight = ownRun ? [['environment', 'Environment', 'fa-network-wired'], ['prerequisites', 'Readiness', 'fa-list-check']].map(([key, label, icon]) => {
+    const r = run.results?.[key]
+    const runningNow = run.stage === key && run.phase === 'running'
+    const failedNow = run.phase === 'error' && run.error?.stage === key
+    return {
+      key, label, icon,
+      status: r?.status || (runningNow ? 'RUNNING' : failedNow ? 'FAILED' : undefined),
+      started_at: r?.started_at || (runningNow && key === 'environment' ? run.startedAt : null),
+      finished_at: r?.finished_at, headline: r?.headline || (failedNow ? run.error?.message : runningNow ? 'Running…' : null),
+    }
+  }) : null
 
   if (!ownRun && !deploying) {
     const last = status.active?.last_deployment
@@ -78,7 +92,7 @@ export default function LiveMonitor({
             <StatusPill status={job?.status || (run.phase === 'running' ? 'RUNNING' : run.phase === 'error' ? 'FAILED' : 'WARN')} label={!job && run.phase === 'paused' ? 'Waiting for you' : !job && run.phase === 'blocked' ? 'Blocked' : undefined} size="lg" />
             <span><i className="fa-solid fa-stopwatch" /> {Number.isNaN(startedMs) ? '—' : fmtDuration(endedMs - startedMs)}</span>
             <span><i className="fa-solid fa-location-dot" /> {STAGES[stageIdx].label}</span>
-            {(job?.requested_by || run.config) && <span><i className="fa-solid fa-user" /> {job?.requested_by || 'you'}</span>}
+            {job?.requested_by && <span><i className="fa-solid fa-user" /> {job.requested_by}</span>}
             {(job?.request?.ChangeTicket || run.config?.changeTicket) && <span><i className="fa-solid fa-ticket" /> {job?.request?.ChangeTicket || run.config?.changeTicket}</span>}
           </div>
         </div>
@@ -89,20 +103,8 @@ export default function LiveMonitor({
         </div>
       </div>
 
-      {/* Stage rail */}
-      <div className="wpx-rail">
-        {STAGES.map((s, i) => {
-          const state = i < stageIdx ? 'done' : i === stageIdx ? (stageFailed ? 'failed' : final ? 'done' : 'active') : 'todo'
-          return (
-            <div key={s.key} className={`wpx-rail-step wpx-rail-${state}`}>
-              <span className="wpx-rail-dot">
-                {state === 'done' ? <i className="fa-solid fa-check" /> : state === 'failed' ? <i className="fa-solid fa-xmark" /> : <i className={`fa-solid ${s.icon}`} />}
-              </span>
-              <span className="wpx-rail-label">{s.label}</span>
-            </div>
-          )
-        })}
-      </div>
+      {/* Journey: every step with real times, and a timeline per server */}
+      <JourneyView lines={deploying ? lines : []} job={job} preflight={preflight} servers={servers} />
 
       {/* Situations that need the user */}
       {ownRun && run.phase === 'paused' && (
@@ -186,12 +188,13 @@ export default function LiveMonitor({
           <div className="wpx-live-final-head">
             <h3><i className="fa-solid fa-file-lines" /> Deployment report</h3>
             <div className="wpx-row-gap">
+              <EvidenceButton jobId={job.job_id} />
               <button type="button" className="wpx-btn wpx-btn-ghost" onClick={() => onOpenReport(job.job_id)}><i className="fa-solid fa-up-right-from-square" /> Open in Reports</button>
               {ownRun && <button type="button" className="wpx-btn wpx-btn-primary" onClick={() => { onReset(); onPlan() }}><i className="fa-solid fa-plus" /> New deployment</button>}
             </div>
           </div>
           {report.error && <Banner toneName="bad">{report.error}</Banner>}
-          {report.data ? <ReportView job={report.data.job} report={report.data.report} logs={lines} /> : !report.error && <div className="wpx-center"><Spinner label="Building the report…" /></div>}
+          {report.data ? <ReportView job={report.data.job} report={report.data.report} logs={lines} showJourney={false} /> : !report.error && <div className="wpx-center"><Spinner label="Building the report…" /></div>}
         </div>
       )}
     </div>
@@ -227,7 +230,7 @@ function OutcomeUnknownPanel({ job, onResume, onReleaseLock }) {
           <p className="wpx-modal-lead">Only release the lock after checking SCCM (Monitoring → Deployments). Your name, the time and the reason are recorded in the audit log.</p>
           {error && <Banner toneName="bad">{error}</Banner>}
           <label className="wpx-field"><span className="wpx-label">Reason (at least 10 characters)</span>
-            <textarea className="wpx-input" rows={3} value={reason} onChange={e => setReason(e.target.value)} placeholder="Checked SCCM: deployment exists, servers patched; validated manually." />
+            <textarea className="wpx-input" rows={3} value={reason} onChange={e => setReason(e.target.value)} placeholder="Why the lock can be released" />
           </label>
           <label className="wpx-field"><span className="wpx-label">Admin key (if required)</span>
             <input className="wpx-input" type="password" value={adminKey} onChange={e => setAdminKey(e.target.value)} autoComplete="off" />

@@ -78,6 +78,16 @@ export function StatusPill({ status, label, size = 'md', icon = true }) {
   )
 }
 
+/* Server environment: Test (no change request needed) or Pre-prod / Prod */
+export function EnvTag({ env }) {
+  const test = env === 'Test'
+  return (
+    <span className={`wpx-env wpx-env-${test ? 'test' : 'prod'}`}>
+      <i className={`fa-solid ${test ? 'fa-flask' : 'fa-shield-halved'}`} />{test ? 'Test' : 'Pre-prod / Prod'}
+    </span>
+  )
+}
+
 /* ─── Donut / ring ─── */
 export function Ring({ value, total, size = 120, stroke = 12, label, sub, toneName }) {
   const pct = total > 0 ? Math.min(1, value / total) : 0
@@ -207,7 +217,11 @@ export function Modal({ title, icon, onClose, children, footer, wide = false, to
 }
 
 export function downloadText(filename, text, type = 'text/plain') {
-  const url = URL.createObjectURL(new Blob([text], { type }))
+  downloadBlob(filename, new Blob([text], { type }))
+}
+
+export function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
   a.download = filename

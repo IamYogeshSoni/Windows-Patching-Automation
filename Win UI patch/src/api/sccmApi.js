@@ -19,19 +19,14 @@ const API_KEY = env.VITE_SCCM_API_KEY ?? ''
 export const FINAL_STATUSES = ['SUCCEEDED', 'COMPLETED_WITH_ISSUES', 'FAILED', 'OUTCOME_UNKNOWN']
 export const isFinal = (job) => FINAL_STATUSES.includes(job?.status)
 
-/* ─── Current user (X-User) ─── */
-const USER_KEY = 'nova-wp-user'
-export function getUserName() {
-  try { return localStorage.getItem(USER_KEY) || env.VITE_SCCM_USER || '' } catch { return env.VITE_SCCM_USER || '' }
-}
-export function setUserName(name) {
-  try { localStorage.setItem(USER_KEY, String(name || '').trim()) } catch { /* storage unavailable */ }
-}
+/* ─── X-User: recorded as requested_by when VITE_SCCM_USER is set ─── */
+export const getUserName = () => (env.VITE_SCCM_USER || '').trim()
 
 /* ─── Polling settings per job kind (API-Integration §2.4) ─── */
 export const POLL_CONFIG = {
   connection_test:       { firstDelayMs: 2000, waitSeconds: 20, gapMs: 1000, timeoutMs: 10 * 60_000, typical: '~15 s' },
   environment:           { firstDelayMs: 2000, waitSeconds: 20, gapMs: 1000, timeoutMs: 20 * 60_000, typical: '~15 s' },
+  evidence:              { firstDelayMs: 2000, waitSeconds: 30, gapMs: 1000, timeoutMs: 20 * 60_000, typical: '10 s – 1 min' },
   ad_servers:            { firstDelayMs: 2000, waitSeconds: 30, gapMs: 1000, timeoutMs: 20 * 60_000, typical: '10 s – 2 min' },
   prerequisites:         { firstDelayMs: 2000, waitSeconds: 30, gapMs: 1000, timeoutMs: 35 * 60_000, typical: '1–3 min' },
   sugs:                  { firstDelayMs: 3000, waitSeconds: 60, gapMs: 1000, timeoutMs: 50 * 60_000, typical: '1–10 min' },
@@ -167,6 +162,15 @@ export const getReport           = (id, o) => request('GET', `/api/reports/${enc
 export const getReportHtml       = async (id, o) => (await request('GET', `/api/reports/${encodeURIComponent(id)}/html`, { ...o, raw: true })).text()
 export const listJumphostReports = (limit = 50, o) => request('POST', '/api/sccm/reports/jumphost', { ...o, body: { limit } })
 export const importJumphostReport = (folder, o) => request('POST', '/api/sccm/reports/jumphost/import', { ...o, body: { report_folder: folder } })
+
+export const dashboard           = (months = 6, o) => request('GET', `/api/dashboard?months=${months}`, o)
+export const createChangeRequest = (body, o) => request('POST', '/api/change-requests', { ...o, body })
+export const startEvidencePack   = (deploymentJobId, o) => request('POST', `/api/reports/${encodeURIComponent(deploymentJobId)}/evidence`, o)
+export const downloadEvidence    = async (evidenceJobId, o) => {
+  const res = await request('GET', `/api/evidence/${encodeURIComponent(evidenceJobId)}/download`, { ...o, raw: true })
+  const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || `evidence-${evidenceJobId}.zip`
+  return { blob: await res.blob(), name }
+}
 
 export const startDeployment = (body, idempotencyKey, o) =>
   request('POST', '/api/sccm/deployments', { ...o, headers: { 'Idempotency-Key': idempotencyKey }, body })

@@ -3,6 +3,7 @@ import {
   asArray, describeError, pollJob, listReports, getReport, getReportHtml, getJobLog, listJumphostReports, importJumphostReport,
 } from '../../api/sccmApi'
 import ReportView from './ReportViews'
+import EvidenceButton from './EvidenceButton'
 import { Banner, Empty, Modal, Spinner, StatusPill, downloadText, fmtAgo, fmtUtc, useNow } from './ui'
 
 const TYPES = [
@@ -159,6 +160,7 @@ function ReportViewer({ jobId }) {
           {report?.report_folder_name && <span><i className="fa-regular fa-folder-open" /> {report.report_folder_name}</span>}
         </div>
         <div className="wpx-row-gap">
+          {state.data?.report_type === 'deployment' && <EvidenceButton jobId={jobId} small />}
           <button type="button" className="wpx-btn wpx-btn-ghost wpx-btn-sm" onClick={openPrintable}><i className="fa-solid fa-print" /> Print / PDF</button>
           <button type="button" className="wpx-btn wpx-btn-soft wpx-btn-sm" onClick={downloadHtml} disabled={downloading}>{downloading ? <Spinner /> : <i className="fa-solid fa-download" />} Download HTML</button>
         </div>

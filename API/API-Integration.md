@@ -266,6 +266,17 @@ Body (all optional):
 ```
 Selectable = `Supported` (Windows Server 2016/2019/2022/2025) and has an `Fqdn`. **Keep `job_id` as `adJobId`.** At most `max_servers_per_run` servers (from `/health`) per run.
 
+### 4.3b Change requests: `POST /api/change-requests`
+Servers listed (`Allowed: true`) in `Config\TestServers.json` on the jumphost are **Test**; every other server is **Pre-prod / Prod**. The AD list job reads that file and returns it as `test_servers`. AD and prerequisite results carry `Environment` per server. A deployment that includes any pre-prod / prod server needs `change_ticket`; one with only test servers may omit it.
+
+Body: `{ "short_description": "...", "description": "...", "change_type": "Normal", "risk": "Low", "planned_start_utc": "...", "planned_end_utc": "...", "servers": ["..."] }` → **201** `{ "number": "CHG0000001", "state": "New", "approval": "Requested", "created_at": "...", "requested_by": "..." }`. Until the ITSM API is connected the number is the fixed `CHANGE_PLACEHOLDER_NUMBER` in `app.py`.
+
+### 4.3c Dashboard: `GET /api/dashboard?months=6`
+Aggregated from the job store: `totals` (runs, by_status, success_rate, servers_patched, unique_servers_patched, kbs_installed, avg/max run time, servers_needing_attention), `months` (runs by outcome, servers patched, KBs installed per month), `top_kbs`, `attention` (latest state per server that is not READY / PATCHED) and `recent` deployments.
+
+### 4.3d Evidence pack: `POST /api/reports/{job_id}/evidence` → `GET /api/evidence/{evidence_job_id}/download`
+For a deployment report. The POST starts a job (kind `evidence`) that copies the run's `Reports\<folder>` files from the jumphost (Summary.json, Validation_KBs.csv, Transcript.txt, State.json). When it has finished, the download returns a zip: README.txt, manifest.json (SHA-256 of every file), the deployment, readiness and environment reports (HTML), the job log, the audit entries, the AD server list (selected servers marked) and `jumphost/*`.
+
 ### 4.4 Prerequisites: `POST /api/sccm/prerequisites`  *(Step 2)*
 Body: `{ "ad_job_id": "<adJobId>", "servers": ["c03dghhypv8871.dslab.ad.adp.com", "C03DGHHYPV3621"] }`: checks exactly those servers, each of which must be selectable in that AD list (less than 24 h old). Without a body the API checks the allowlist in `Config\TestServers.json` on the jumphost (manual / legacy). Poll kind `prerequisites`. **Keep `job_id` as `precheckJobId`.** **Result** (real data, not file paths):
 ```json

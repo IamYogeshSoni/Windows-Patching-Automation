@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { StatusPill, Banner, Spinner, Empty, fmtAgo, fmtUtc, shortHost, parseTime } from './ui'
+import { StatusPill, Banner, Spinner, Empty, EnvTag, fmtAgo, fmtUtc, shortHost, parseTime } from './ui'
 import { shortName } from './hooks'
 
 const PAGE = 200
@@ -20,6 +20,7 @@ export default function AdServerPicker({
   const selected = useMemo(() => new Set(plan.servers.map(s => String(s).toLowerCase())), [plan.servers])
   const readinessBy = useMemo(() => new Map(readinessRows.map(r => [shortName(r.Server), r])), [readinessRows])
   const selectable = (r) => Boolean(r.Fqdn && r.Supported)
+  const envOf = (r) => r.Environment
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -58,7 +59,7 @@ export default function AdServerPicker({
         </label>
         <label className="wpx-field wpx-ad-name">
           <span className="wpx-label">Computer name (wildcard *)</span>
-          <input className="wpx-input wpx-input-mono" value={plan.adFilter} maxLength={64} placeholder="e.g. C03DGH*  (empty = all servers)"
+          <input className="wpx-input wpx-input-mono" value={plan.adFilter} maxLength={64} placeholder="Empty for all servers"
             onChange={e => setPlan({ adFilter: e.target.value.replace(/[^A-Za-z0-9*_.-]/g, '') })} />
         </label>
         <button type="submit" className="wpx-btn wpx-btn-primary wpx-ad-go" disabled={ad.loading || !domains.length} id="btn-ad-search">
@@ -70,7 +71,7 @@ export default function AdServerPicker({
         {advanced && (
           <label className="wpx-field wpx-ad-ou">
             <span className="wpx-label">Organizational unit (distinguished name, optional)</span>
-            <input className="wpx-input wpx-input-mono" value={plan.adSearchBase} maxLength={400} placeholder="OU=Servers,DC=dslab,DC=ad,DC=adp,DC=com"
+            <input className="wpx-input wpx-input-mono" value={plan.adSearchBase} maxLength={400} placeholder="Distinguished name of the OU"
               onChange={e => setPlan({ adSearchBase: e.target.value })} />
           </label>
         )}
@@ -97,7 +98,7 @@ export default function AdServerPicker({
             Lists the enabled Windows servers in {domains.join(', ') || 'Active Directory'} (SOP step 3). Choose the servers, check their readiness, then deploy.
           </Empty>
         ) : !rows.length ? (
-          <Empty icon="fa-magnifying-glass" title="No Windows servers matched">Try a broader name filter, e.g. C03*.</Empty>
+          <Empty icon="fa-magnifying-glass" title="No Windows servers matched">Try a broader name filter.</Empty>
         ) : (
           <>
             <div className="wpx-ad-toolbar">
@@ -116,7 +117,7 @@ export default function AdServerPicker({
             <div className="wpx-table-wrap wpx-ad-table">
               <table className="wpx-table">
                 <thead>
-                  <tr><th aria-label="Select" /><th>Server</th><th>Operating system</th><th>Last logon</th><th>OU</th><th>Readiness</th></tr>
+                  <tr><th aria-label="Select" /><th>Server</th><th>Environment</th><th>Operating system</th><th>Last logon</th><th>OU</th><th>Readiness</th></tr>
                 </thead>
                 <tbody>
                   {shown.map(r => {
@@ -131,6 +132,7 @@ export default function AdServerPicker({
                           <div className="wpx-ad-name-cell"><strong>{r.Name}</strong><small>{fqdn || 'no DNS name in AD'}</small></div>
                           {r.Description && <small className="wpx-muted">{r.Description}</small>}
                         </td>
+                        <td>{envOf(r) ? <EnvTag env={envOf(r)} /> : <span className="wpx-muted">—</span>}</td>
                         <td>
                           <span className={r.Supported ? '' : 'wpx-tone-bad'}>{String(r.OperatingSystem || '').replace(/^Windows Server /, 'Server ')}</span>
                           {!r.Supported && <small className="wpx-tone-bad"> · not supported</small>}

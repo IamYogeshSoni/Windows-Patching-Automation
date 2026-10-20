@@ -6,6 +6,9 @@ import html
 import json
 import hmac
 import base64
+import io
+import csv
+import zipfile
 import sqlite3
 import hashlib
 import secrets
@@ -22,7 +25,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
@@ -77,6 +80,11 @@ SITE_CODE = _env("SCCM_SITE_CODE", "T01")
 # RunAs endpoint registered on the jumphost (Register-PSSessionConfiguration).
 SESSION_CONFIG = _env("SCCM_SESSION_CONFIG", "SCCMAutomation")
 
+# How the API signs in to the jumphost: Kerberos (needs a GLOBAL domain
+# controller reachable from this machine) or Negotiate (Kerberos, else NTLM;
+# NTLM needs the jumphost in WinRM TrustedHosts on this machine).
+SESSION_AUTH = _env("SCCM_SESSION_AUTH", "Kerberos")
+
 # The Automation folder on the jumphost (Run-Patching.ps1, Scripts\, Config\, Reports\).
 PROJECT_ROOT = _env("SCCM_PROJECT_ROOT", r"C:\SCCM_Automation")
 
@@ -92,6 +100,10 @@ AD_DOMAINS = [d.strip().lower() for d in _env("SCCM_AD_DOMAINS", "dslab.ad.adp.c
 
 # Most servers one prerequisite run or deployment may target.
 MAX_SERVERS_PER_RUN = int(_env("SCCM_MAX_SERVERS_PER_RUN", "50"))
+
+# Change requests: until the ITSM API is connected, POST /api/change-requests
+# returns this fixed number.
+CHANGE_PLACEHOLDER_NUMBER = "CHG0000001"
 
 # Exact membership the read-only dry run checks. Deployments use the
 # allowlist in Config\TestServers.json on the jumphost instead.
@@ -124,6 +136,7 @@ JOB_TIMEOUTS = {
     "report_list": 300,
     "report_import": 300,
     "ad_servers": 900,
+    "evidence": 900,
 }
 
 # Jobs whose result is a report (GET /api/reports).
@@ -375,6 +388,44 @@ REMOTE_SCRIPT = r"""
             }
         }
 
+        # Every file of a run's Reports\<folder> (Summary.json, Validation_KBs.csv,
+        # Transcript.txt, State.json...) for the evidence pack.
+        if ($operation.Kind -eq 'EvidenceFiles') {
+            $files = @()
+            $note = $null
+            if (-not $operation.ReportFolder) {
+                $note = 'The run has no report folder on the jumphost (it stopped before writing one).'
+            } else {
+                $folder = Join-Path ([string]$operation.ProjectRoot) "Reports\$($operation.ReportFolder)"
+                if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+                    $note = "Report folder not found on the jumphost: $folder"
+                } else {
+                    $total = 0
+                    foreach ($f in @(Get-ChildItem -LiteralPath $folder -File | Sort-Object Name)) {
+                        if ($f.Length -gt 10MB -or ($total + $f.Length) -gt 25MB) {
+                            Write-Host "Skipped $($f.Name) ($([math]::Round($f.Length / 1MB, 1)) MB): too large for the pack"
+                            continue
+                        }
+                        # Shared read: the transcript may still be open.
+                        $stream = [IO.File]::Open($f.FullName, 'Open', 'Read', 'ReadWrite')
+                        try { $copy = New-Object IO.MemoryStream; $stream.CopyTo($copy); $bytes = $copy.ToArray() } finally { $stream.Dispose() }
+                        $total += $bytes.Length
+                        $files += [pscustomobject]@{
+                            name = $f.Name; size = $bytes.Length
+                            modified_utc = $f.LastWriteTimeUtc.ToString('o')
+                            content_b64 = [Convert]::ToBase64String($bytes)
+                        }
+                        Write-Host "Collected $($f.Name) ($($bytes.Length) bytes)"
+                    }
+                }
+            }
+            if ($note) { Write-Host $note }
+            return [pscustomobject]@{
+                success = $true; host = $env:COMPUTERNAME; run_as = $runAs
+                report_folder = $operation.ReportFolder; note = $note; files = $files
+            }
+        }
+
         # Windows servers from Active Directory (Get-ADServers.ps1), to choose patch targets from.
         if ($operation.Kind -eq 'AdServerList') {
             $path = Join-Path ([string]$operation.ProjectRoot) 'Scripts\Get-ADServers.ps1'
@@ -385,6 +436,17 @@ REMOTE_SCRIPT = r"""
             if ($targetCredential) { $p.Credential = $targetCredential }
             Write-Host "Running $path as $runAs"
             $rows = @(& $path @p | Where-Object { $_ -and $_.PSObject.Properties['Name'] })
+            # Test servers: the allowlist in Config\TestServers.json on the jumphost.
+            # Every other server is treated as pre-prod / production.
+            $testFile = Join-Path ([string]$operation.ProjectRoot) 'Config\TestServers.json'
+            $testServers = @()
+            if (Test-Path -LiteralPath $testFile -PathType Leaf) {
+                $testServers = @(Get-Content -LiteralPath $testFile -Raw | ConvertFrom-Json |
+                    Where-Object { $_.Allowed -eq $true -and $_.Fqdn } | ForEach-Object { ([string]$_.Fqdn).ToLowerInvariant() })
+                Write-Host "Test servers (Config\TestServers.json): $(if ($testServers.Count) { $testServers -join ', ' } else { 'none' })"
+            } else {
+                Write-Host 'Config\TestServers.json not found: every server counts as pre-prod / production.'
+            }
             return [pscustomobject]@{
                 success = $true
                 host = $env:COMPUTERNAME
@@ -394,6 +456,7 @@ REMOTE_SCRIPT = r"""
                 search_base = $p.SearchBase
                 count = $rows.Count
                 truncated = ($rows.Count -ge $p.MaxResults)
+                test_servers = $testServers
                 servers = $rows
             }
         }
@@ -1189,7 +1252,7 @@ def run_powershell(operation: dict, timeout: int, on_line=None, target: str = "s
     else:
         env["SCCM_JUMPHOST"] = JUMPHOST
         env["SCCM_SESSION_CONFIG"] = SESSION_CONFIG
-        env["SCCM_SESSION_AUTH"] = "Kerberos"
+        env["SCCM_SESSION_AUTH"] = SESSION_AUTH
         env["SCCM_USERNAME"] = USERNAME
         env["SCCM_PASSWORD"] = PASSWORD
         env["SCCM_TARGET_USERNAME"], env["SCCM_TARGET_PASSWORD"] = server_account()
@@ -1569,7 +1632,7 @@ NEXT_STEPS = {
 }
 
 
-def add_report_details(kind: str, result: dict):
+def add_report_details(kind: str, result: dict, operation: Optional[dict] = None):
     """Computed fields that make the UI simpler (counts, selectable servers)."""
     if kind == "prerequisites":
         servers = [s for s in as_list(result.get("servers")) if isinstance(s, dict)]
@@ -1581,6 +1644,12 @@ def add_report_details(kind: str, result: dict):
             "eligible": sum(1 for s in servers if str(s.get("Eligibility")).upper() == "ELIGIBLE"),
         }
         result["selectable_servers"] = [s.get("Server") for s in ready]
+    if kind in ("ad_servers", "prerequisites"):
+        tests = (test_server_names(result) if kind == "ad_servers"
+                 else test_servers_for_check((operation or {}).get("AdJobId")))
+        for s in as_list(result.get("servers")):
+            if isinstance(s, dict):
+                s["Environment"] = server_environment(s.get("Name") or s.get("Server") or s.get("Fqdn"), tests)
     if kind == "ad_servers":
         servers = [s for s in as_list(result.get("servers")) if isinstance(s, dict)]
         result["servers"] = servers
@@ -1657,8 +1726,14 @@ def run_job(job_id: str, kind: str, operation: dict, timeout: int):
         status = "FAILED"
 
     result["duration_seconds"] = round((utc_now() - started).total_seconds(), 2)
+    if kind == "evidence":
+        try:
+            store_evidence_files(job_id, result)
+        except Exception as exc:
+            result = {"success": False, "errors": [f"Evidence files not stored: {exc}"]}
+            status = "FAILED"
     try:
-        add_report_details(kind, result)
+        add_report_details(kind, result, operation)
     except Exception as exc:  # a report detail must never lose the result
         result.setdefault("warnings", [])
         result["warnings"] = as_list(result["warnings"]) + [f"Report details not added: {exc}"]
@@ -1909,7 +1984,8 @@ class DeploymentRequest(BaseModel):
     deadline_utc: Optional[datetime] = None
     restart_mode: str = Field(default="Script")
     kb: Optional[List[str]] = None
-    change_ticket: str = Field(min_length=3, max_length=100)
+    # Required when any server is pre-prod / production (not in Config\TestServers.json).
+    change_ticket: Optional[str] = Field(default=None, max_length=100)
     approver: str = Field(min_length=2, max_length=100)
     approval_reference: str = Field(min_length=2, max_length=200)
     readiness_confirmed: bool
@@ -1941,6 +2017,21 @@ class SugListRequest(ListRequest):
 
 class CollectionListRequest(ListRequest):
     include_members: bool = False
+
+
+class ChangeRequestCreate(BaseModel):
+    short_description: str = Field(min_length=5, max_length=160)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    justification: Optional[str] = Field(default=None, max_length=2000)
+    backout_plan: Optional[str] = Field(default=None, max_length=2000)
+    change_type: Optional[str] = Field(default="Normal", max_length=30)
+    category: Optional[str] = Field(default=None, max_length=60)
+    risk: Optional[str] = Field(default=None, max_length=30)
+    impact: Optional[str] = Field(default=None, max_length=30)
+    assignment_group: Optional[str] = Field(default=None, max_length=100)
+    planned_start_utc: Optional[datetime] = None
+    planned_end_utc: Optional[datetime] = None
+    servers: List[str] = Field(default_factory=list, max_length=1000)
 
 
 class AdServerListRequest(BaseModel):
@@ -2203,6 +2294,381 @@ def ad_selected_servers(ad_job_id: Optional[str], names: List[str]) -> List[str]
     return chosen
 
 
+def test_server_names(ad_result: dict) -> set:
+    """Short names of the test servers an AD list job read from Config\\TestServers.json."""
+    return {str(s).split(".")[0].upper() for s in as_list((ad_result or {}).get("test_servers")) if s}
+
+
+def test_servers_for_check(ad_job_id: Optional[str]) -> Optional[set]:
+    """Test servers for a prerequisites run: from its AD list job. None when the
+    run checked the Config\\TestServers.json allowlist itself (all test servers)."""
+    if not ad_job_id:
+        return None
+    row = get_job(ad_job_id)
+    result = json.loads(row["result_json"]) if row and row["result_json"] else {}
+    return test_server_names(result)
+
+
+def server_environment(name, test_servers: Optional[set]) -> str:
+    """'Test' for a server in the jumphost's Config\\TestServers.json, else 'Pre-prod / Prod'.
+    test_servers None: the server came from that allowlist, so it is a test server."""
+    if test_servers is None:
+        return "Test"
+    short = str(name or "").split(".")[0].upper()
+    return "Test" if short in test_servers else "Pre-prod / Prod"
+
+
+@app.post("/api/change-requests", status_code=201)
+def create_change_request(
+    request: ChangeRequestCreate,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    x_user: str = Header(default="", alias="X-User"),
+):
+    """
+    Raises a change request for a patch window (needed for pre-prod /
+    production servers). Until the ITSM API is connected it returns the
+    fixed number CHANGE_PLACEHOLDER_NUMBER.
+    """
+    authorize(x_api_key)
+    user = requester(x_user)
+    ticket = {
+        **request.model_dump(mode="json"),
+        "number": CHANGE_PLACEHOLDER_NUMBER,
+        "state": "New",
+        "approval": "Requested",
+        "created_at": iso(utc_now()),
+        "requested_by": user,
+    }
+    audit("change_request_created", user, None,
+          f"{ticket['number']}: {request.short_description} ({len(request.servers)} servers)")
+    return ticket
+
+
+# ------------------------------------------------------------
+# Dashboard: aggregated from the job store (real runs only).
+# ------------------------------------------------------------
+
+PATCHED_VERDICTS = {"PATCHED"}
+HEALTHY_STATES = {"PATCHED", "READY", "ALREADY_COMPLIANT"}
+
+
+@app.get("/api/dashboard")
+def dashboard(months: int = 6, x_api_key: str = Header(default="", alias="X-API-Key")):
+    """
+    Totals over the deployments and readiness checks recorded by this API:
+    runs by status, servers patched, KBs installed, run times, runs per
+    month, most installed KBs, servers needing attention (latest state per
+    server) and the recent deployments.
+    """
+    authorize(x_api_key)
+    months = max(1, min(months, 36))
+    now = utc_now()
+    with closing(db()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM jobs WHERE kind IN ('deployment', 'deployment_resume', 'report_import', 'prerequisites') "
+            "AND status NOT IN ('QUEUED', 'RUNNING') ORDER BY created_at, rowid"
+        ).fetchall()
+
+    # The last `months` calendar months, oldest first, ending with this one.
+    index = now.year * 12 + now.month - 1
+    month_keys = [f"{i // 12:04d}-{i % 12 + 1:02d}" for i in range(index - months + 1, index + 1)]
+    per_month = {k: {"month": k, "runs": 0, "succeeded": 0, "with_issues": 0, "failed": 0,
+                     "servers_patched": 0, "kbs_installed": 0} for k in month_keys}
+
+    by_status = {}
+    deployments = []
+    kb_counter = {}
+    patched_servers = set()
+    latest_state = {}
+    durations = []
+    server_runs = servers_patched = kbs_installed = 0
+
+    for row in rows:
+        result = json.loads(row["result_json"]) if row["result_json"] else {}
+        request = json.loads(row["request_json"]) if row["request_json"] else {}
+        when = row["finished_at"] or row["created_at"]
+
+        if row["kind"] == "prerequisites":
+            if row["status"] != "SUCCEEDED":
+                continue
+            for s in as_list(result.get("servers")):
+                if isinstance(s, dict) and s.get("Server"):
+                    latest_state[str(s["Server"]).split(".")[0].upper()] = {
+                        "server": s["Server"], "status": s.get("Overall"), "source": "Readiness check",
+                        "detail": ", ".join(x for x in (s.get("Failed"), s.get("Warnings")) if x) or None,
+                        "at": when, "job_id": row["id"],
+                    }
+            continue
+        if reports.report_type(row["kind"], result) != "deployment":
+            continue
+
+        status = row["status"]
+        by_status[status] = by_status.get(status, 0) + 1
+        results = [s for s in as_list(result.get("servers")) if isinstance(s, dict) and s.get("Server")]
+        patched = 0
+        installed_here = 0
+        for s in results:
+            verdict = str(s.get("Verdict") or "").upper()
+            if verdict in PATCHED_VERDICTS:
+                patched += 1
+                patched_servers.add(str(s["Server"]).lower())
+            if verdict in ("PATCHED", "PENDING_RESTART"):
+                missing = {str(k).upper() for k in as_list(s.get("MissingKbs"))}
+                for kb in {str(k).upper() for k in as_list(s.get("RequiredKbsBefore"))} - missing:
+                    kb_counter[kb] = kb_counter.get(kb, 0) + 1
+                    installed_here += 1
+            latest_state[str(s["Server"]).split(".")[0].upper()] = {
+                "server": s["Server"], "status": verdict or None, "source": "Deployment",
+                "detail": (f"Missing: {', '.join(as_list(s.get('MissingKbs')))}" if as_list(s.get("MissingKbs"))
+                           else s.get("Detail")),
+                "at": when, "job_id": row["id"],
+                "deployment_name": row["deployment_name"] or result.get("deployment_name"),
+            }
+        server_runs += len(results)
+        servers_patched += patched
+        kbs_installed += installed_here
+        if isinstance(result.get("duration_seconds"), (int, float)) and row["kind"] != "report_import":
+            durations.append(result["duration_seconds"])
+
+        month = (row["created_at"] or "")[:7]
+        if month in per_month:
+            pm = per_month[month]
+            pm["runs"] += 1
+            pm["servers_patched"] += patched
+            pm["kbs_installed"] += installed_here
+            pm["succeeded" if status == "SUCCEEDED" else "with_issues" if status == "COMPLETED_WITH_ISSUES" else "failed"] += 1
+
+        deployments.append({
+            "job_id": row["id"],
+            "kind": row["kind"],
+            "deployment_name": row["deployment_name"] or result.get("deployment_name"),
+            "status": status,
+            "requested_by": row["requested_by"],
+            "created_at": row["created_at"],
+            "finished_at": row["finished_at"],
+            "duration_seconds": result.get("duration_seconds"),
+            "change_ticket": request.get("ChangeTicket") or (result.get("summary") or {}).get("ChangeTicket"),
+            "sug": result.get("sug"),
+            "collection": result.get("collection"),
+            "servers": len(results),
+            "patched": patched,
+            "kbs_installed": installed_here,
+        })
+
+    runs = len(deployments)
+    attention = sorted(
+        (v for v in latest_state.values() if str(v.get("status") or "").upper() not in HEALTHY_STATES),
+        key=lambda v: v["at"] or "", reverse=True,
+    )
+    return {
+        "generated_at": iso(now),
+        "totals": {
+            "runs": runs,
+            "by_status": by_status,
+            "success_rate": round(by_status.get("SUCCEEDED", 0) / runs, 3) if runs else None,
+            "server_runs": server_runs,
+            "servers_patched": servers_patched,
+            "unique_servers_patched": len(patched_servers),
+            "server_success_rate": round(servers_patched / server_runs, 3) if server_runs else None,
+            "kbs_installed": kbs_installed,
+            "avg_duration_seconds": round(sum(durations) / len(durations), 1) if durations else None,
+            "max_duration_seconds": max(durations) if durations else None,
+            "servers_tracked": len(latest_state),
+            "servers_needing_attention": len(attention),
+        },
+        "months": [per_month[k] for k in month_keys],
+        "top_kbs": [{"kb": k, "installs": n} for k, n in sorted(kb_counter.items(), key=lambda kv: (-kv[1], kv[0]))[:10]],
+        "attention": attention[:50],
+        "recent": list(reversed(deployments))[:15],
+    }
+
+
+# ------------------------------------------------------------
+# Evidence pack: one zip per deployment for audit / the change record.
+# ------------------------------------------------------------
+
+EVIDENCE_DIR = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "evidence")
+
+
+def store_evidence_files(job_id: str, result: dict):
+    """Writes the jumphost files of an evidence job to disk; the job result keeps their names and hashes."""
+    folder = os.path.join(EVIDENCE_DIR, job_id)
+    os.makedirs(folder, exist_ok=True)
+    stored = []
+    for f in as_list(result.get("files")):
+        if not isinstance(f, dict) or not f.get("name"):
+            continue
+        name = os.path.basename(str(f["name"]))
+        data = base64.b64decode(f.get("content_b64") or "")
+        with open(os.path.join(folder, name), "wb") as handle:
+            handle.write(data)
+        stored.append({"name": name, "size": len(data), "modified_utc": f.get("modified_utc"),
+                       "sha256": hashlib.sha256(data).hexdigest()})
+    result["files"] = stored
+
+
+@app.post("/api/reports/{job_id}/evidence", status_code=202)
+def start_evidence_pack(
+    job_id: str,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    x_user: str = Header(default="", alias="X-User"),
+):
+    """
+    Collects the run's files from the jumphost (Reports\\<folder>: Summary.json,
+    Validation_KBs.csv, Transcript.txt, State.json...). When the job has
+    finished, GET /api/evidence/{evidence_job_id}/download returns the zip.
+    """
+    authorize(x_api_key)
+    view = report_job(job_id)
+    if reports.report_type(view["kind"], view.get("result") or {}) != "deployment":
+        raise HTTPException(status_code=400, detail="Evidence packs are made for deployment reports.")
+    folder = str((view.get("result") or {}).get("report_folder_name") or "")
+    return submit_job("evidence", {
+        "Kind": "EvidenceFiles",
+        "ProjectRoot": PROJECT_ROOT,
+        "ReportFolder": folder if REPORT_FOLDER_PATTERN.match(folder) else None,
+        "DeploymentJobId": job_id,
+        "RequestedAt": iso(utc_now()),
+    }, requested_by=requester(x_user))
+
+
+def _finished_job(job_id: Optional[str], kinds) -> Optional[dict]:
+    row = get_job(job_id) if job_id else None
+    if not row or row["kind"] not in kinds or row["status"] in ACTIVE_STATUSES:
+        return None
+    return job_view(row)
+
+
+@app.get("/api/evidence/{evidence_job_id}/download")
+def download_evidence(
+    evidence_job_id: str,
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    x_user: str = Header(default="", alias="X-User"),
+):
+    """The evidence pack (zip): reports, job log, audit entries, AD list, jumphost files and a manifest with SHA-256 hashes."""
+    authorize(x_api_key)
+    ev_row = get_job(evidence_job_id)
+    if not ev_row or ev_row["kind"] != "evidence":
+        raise HTTPException(status_code=404, detail="Evidence job not found.")
+    if ev_row["status"] in ACTIVE_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Evidence job is {ev_row['status']}; download when it has finished.")
+    ev = job_view(ev_row)
+    dep = report_job(ev["request"]["DeploymentJobId"])
+    dep_result = dep.get("result") or {}
+    dep_request = dep.get("request") or {}
+    user = requester(x_user)
+
+    files = {}  # path in the zip -> bytes
+    logs = get_logs(dep["job_id"], -1, 100000)
+    files["01-deployment-report.html"] = reports.render_report(dep, logs).encode("utf-8")
+    files["02-deployment-job-log.txt"] = "\n".join(f"{l['time']}  {l['line']}" for l in logs).encode("utf-8")
+
+    pre = _finished_job(dep_request.get("PrecheckJobId"), ("prerequisites",))
+    if pre:
+        files["03-readiness-report.html"] = reports.render_report(pre, []).encode("utf-8")
+    with closing(db()) as conn:
+        env_row = conn.execute(
+            "SELECT * FROM jobs WHERE kind = 'environment' AND status NOT IN ('QUEUED', 'RUNNING') "
+            "AND created_at <= ? ORDER BY created_at DESC LIMIT 1", (dep["created_at"],),
+        ).fetchone()
+    if env_row:
+        files["04-environment-check.html"] = reports.render_report(job_view(env_row), []).encode("utf-8")
+
+    ad = _finished_job((pre or {}).get("request", {}).get("AdJobId"), ("ad_servers",))
+    if ad:
+        selected = {str(s).lower() for s in as_list(dep_request.get("Servers"))}
+        out = io.StringIO()
+        columns = ["Selected", "Environment", "Name", "Fqdn", "OperatingSystem", "Supported", "LastLogonUtc", "Stale", "OU", "Description"]
+        writer = csv.DictWriter(out, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for s in as_list((ad.get("result") or {}).get("servers")):
+            if isinstance(s, dict):
+                writer.writerow({**s, "Selected": str(s.get("Fqdn") or "").lower() in selected,
+                                 "Environment": s.get("Environment")})
+        files["05-ad-server-list.csv"] = out.getvalue().encode("utf-8")
+
+    job_ids = [j for j in (dep["job_id"], (pre or {}).get("job_id"), (ad or {}).get("job_id"), evidence_job_id) if j]
+    change = str(dep_request.get("ChangeTicket") or "")
+    with closing(db()) as conn:
+        marks = ",".join("?" * len(job_ids))
+        audit_rows = conn.execute(
+            f"SELECT ts, action, user, job_id, detail FROM audit_log WHERE job_id IN ({marks}) "
+            "OR (action = 'change_request_created' AND ? != '' AND detail LIKE ?) ORDER BY id",
+            (*job_ids, change, f"{change}:%"),
+        ).fetchall()
+    files["06-audit-log.json"] = json.dumps([dict(r) for r in audit_rows], indent=2).encode("utf-8")
+
+    stored = os.path.join(EVIDENCE_DIR, evidence_job_id)
+    ev_result = ev.get("result") or {}
+    for f in as_list(ev_result.get("files")):
+        path = os.path.join(stored, os.path.basename(str(f.get("name"))))
+        if os.path.isfile(path):
+            with open(path, "rb") as handle:
+                files[f"jumphost/{os.path.basename(path)}"] = handle.read()
+    jumphost_note = ev_result.get("note") or (
+        "; ".join(str(e) for e in as_list(ev_result.get("errors"))) if ev["status"] != "SUCCEEDED" else None)
+
+    servers = [{
+        "server": s.get("Server"), "environment": (dep_request.get("ServerEnvironments") or {}).get(s.get("Server")),
+        "verdict": s.get("Verdict"),
+        "missing_kbs": as_list(s.get("MissingKbs")), "restarted": s.get("Restarted"),
+    } for s in as_list(dep_result.get("servers")) if isinstance(s, dict)]
+    manifest = {
+        "generated_at": iso(utc_now()),
+        "generated_by": user,
+        "deployment": {
+            "job_id": dep["job_id"], "name": dep.get("deployment_name") or dep_result.get("deployment_name"),
+            "status": dep["status"], "requested_by": dep.get("requested_by"),
+            "created_at": dep["created_at"], "started_at": dep.get("started_at"), "finished_at": dep.get("finished_at"),
+            "sug": dep_result.get("sug"), "collection": dep_result.get("collection"),
+            "maintenance_window": dep_result.get("maintenance_window"), "deadline_utc": dep_request.get("DeadlineUtc"),
+            "report_folder": dep_result.get("report_folder_name"),
+        },
+        "change": {
+            "ticket": dep_request.get("ChangeTicket"), "approver": dep_request.get("Approver"),
+            "approval_reference": dep_request.get("ApprovalReference"),
+        },
+        "servers": servers,
+        "related_jobs": {"readiness": (pre or {}).get("job_id"), "ad_server_list": (ad or {}).get("job_id"),
+                         "environment": env_row["id"] if env_row else None, "evidence": evidence_job_id},
+        "jumphost_files_note": jumphost_note,
+        "files": [{"path": p, "size": len(b), "sha256": hashlib.sha256(b).hexdigest()} for p, b in files.items()],
+    }
+    readme = [
+        f"Evidence pack - {manifest['deployment']['name']}",
+        "=" * 60,
+        f"Status          : {dep['status']}",
+        f"Requested by    : {dep.get('requested_by') or '-'}",
+        f"Change          : {manifest['change']['ticket'] or '-'}   Approver: {manifest['change']['approver'] or '-'}   Reference: {manifest['change']['approval_reference'] or '-'}",
+        f"Update group    : {dep_result.get('sug') or '-'}",
+        f"Collection      : {dep_result.get('collection') or '-'}",
+        f"Started/finished: {dep.get('started_at') or '-'} / {dep.get('finished_at') or '-'} (UTC)",
+        f"Generated       : {manifest['generated_at']} by {user or '-'}",
+        "",
+        "Servers:",
+        *[f"  {s['server']:<40} {(s['environment'] or '-'):<16} {s['verdict'] or '-'}" + (f"  missing {', '.join(s['missing_kbs'])}" if s['missing_kbs'] else "") for s in servers],
+        "",
+        "Files (SHA-256 in manifest.json):",
+        *[f"  {f['path']} ({f['size']} bytes)" for f in manifest["files"]],
+    ]
+    if jumphost_note:
+        readme += ["", f"Jumphost files: {jumphost_note}"]
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as pack:
+        pack.writestr("README.txt", "\r\n".join(readme))
+        pack.writestr("manifest.json", json.dumps(manifest, indent=2))
+        for path, data in files.items():
+            pack.writestr(path, data)
+    audit("evidence_downloaded", user, dep["job_id"], f"evidence job {evidence_job_id}; {len(files)} files")
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(manifest["deployment"]["name"] or "deployment")).strip("-")
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="evidence-{safe}-{dep["job_id"]}.zip"'},
+    )
+
+
 AD_NAME_FILTER_PATTERN = re.compile(r"^[A-Za-z0-9*_.\-]{1,64}$")
 AD_SEARCH_BASE_PATTERN = re.compile(r'^(?:(?:OU|CN|DC)=[^,;"<>\\=]+,)*DC=[^,;"<>\\=]+$', re.IGNORECASE)
 
@@ -2427,7 +2893,8 @@ def start_deployment(
         raise conflict
 
     # Servers: chosen from a recent, successful prerequisites run.
-    precheck = require_succeeded_job(request.precheck_job_id, "prerequisites", "Prerequisites")["result"]
+    precheck_view = require_succeeded_job(request.precheck_job_id, "prerequisites", "Prerequisites")
+    precheck = precheck_view["result"]
     checked = [s for s in as_list(precheck.get("servers")) if isinstance(s, dict) and s.get("Server")]
     if not checked:
         raise HTTPException(
@@ -2463,6 +2930,19 @@ def start_deployment(
             servers.append(str(row["Server"]))
     if len(servers) > MAX_SERVERS_PER_RUN:
         raise HTTPException(status_code=400, detail=f"At most {MAX_SERVERS_PER_RUN} servers per deployment (SCCM_MAX_SERVERS_PER_RUN).")
+
+    tests = test_servers_for_check((precheck_view.get("request") or {}).get("AdJobId"))
+    environments = {s: server_environment(s, tests) for s in servers}
+    change_ticket = (request.change_ticket or "").strip()
+    production = [s for s, env in environments.items() if env != "Test"]
+    if production and len(change_ticket) < 3:
+        raise HTTPException(
+            status_code=400,
+            detail=f"A change request is required for pre-prod / production servers ({', '.join(production)}). "
+                   "Enter its number, or raise one with POST /api/change-requests.",
+        )
+    if not change_ticket:
+        change_ticket = "Not required (test servers)"
 
     sug_id = request.sug_id.strip()
     if not sug_id.isdigit():
@@ -2549,7 +3029,8 @@ def start_deployment(
         "DeadlineUtc": deadline.strftime("%Y-%m-%d %H:%M") if deadline else None,
         "RestartMode": restart_mode_value(request.restart_mode),
         "Kb": kbs,
-        "ChangeTicket": request.change_ticket.strip(),
+        "ChangeTicket": change_ticket,
+        "ServerEnvironments": environments,
         "Approver": request.approver.strip(),
         "ApprovalReference": request.approval_reference.strip(),
         "RequestedBy": user,

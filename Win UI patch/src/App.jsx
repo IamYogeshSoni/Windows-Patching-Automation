@@ -75,7 +75,6 @@ export default function App() {
   const [currentStep, setCurrentStep] = useState(1)
   const [selectedServers, setSelectedServers] = useState([])
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
-  const [profileDropdownOpen, setProfileDropdownOpen] = useState(false)
 
   // Lifted theme state — shared between Sidebar and EnterprisePortal.
   // index.html sets <html data-theme> before first paint; start from that.
@@ -219,37 +218,6 @@ export default function App() {
           )}
         </button>
 
-        <div className="global-profile">
-          <button
-            type="button"
-            className="global-profile-trigger"
-            onClick={() => setProfileDropdownOpen(prev => !prev)}
-            aria-label="Open user menu"
-          >
-            <img
-              src="https://ui-avatars.com/api/?name=Admin+User&background=000000&color=fff&rounded=true&size=40"
-              alt="Admin User"
-              className="global-avatar"
-            />
-          </button>
-
-          {profileDropdownOpen && (
-            <div className="global-profile-menu">
-              <div className="global-profile-user">
-                <strong>Admin User</strong>
-                <span>Platform Admin</span>
-              </div>
-              <button type="button" className="global-profile-item">
-                <i className="fa-regular fa-user"></i>
-                <span>My Profile</span>
-              </button>
-              <button type="button" className="global-profile-item">
-                <i className="fa-solid fa-sliders"></i>
-                <span>Settings</span>
-              </button>
-            </div>
-          )}
-        </div>
       </div>
     </header>
   )

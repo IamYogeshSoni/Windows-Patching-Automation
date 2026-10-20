@@ -17,6 +17,8 @@ desktop.ini
 !.env.example
 
 # Python (API)
+API/jobs.db
+API/evidence/
 __pycache__/
 *.py[cod]
 .venv/

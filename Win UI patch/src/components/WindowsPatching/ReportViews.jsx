@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { asArray } from '../../api/sccmApi'
-import { STAGES } from './hooks'
+import JourneyView from './JourneyView'
 import { Card, Kpi, Ring, StackBar, StatusPill, Banner, fmtUtc, fmtDuration, parseTime, shortHost, tone } from './ui'
 
 /* ══════════════════════════════════════════════════════════════════
@@ -14,9 +14,9 @@ export function reportTypeOf(job, report) {
   return job?.kind || 'other'
 }
 
-export default function ReportView({ job, report, logs = [] }) {
+export default function ReportView({ job, report, logs = [], showJourney = true }) {
   const type = reportTypeOf(job, report)
-  if (type === 'deployment') return <DeploymentReport job={job} report={report} logs={logs} />
+  if (type === 'deployment') return <DeploymentReport job={job} report={report} logs={logs} showJourney={showJourney} />
   if (type === 'prerequisites') return <PrerequisiteReport job={job} report={report} />
   if (type === 'environment') return <EnvironmentReport job={job} report={report} />
   return <Card title="Report"><pre className="wpx-pre">{JSON.stringify(report, null, 2)}</pre></Card>
@@ -108,7 +108,7 @@ const SOP_SETTINGS = {
 }
 const truthy = (v) => v === true || v === 'True' || v === 'true'
 
-export function DeploymentReport({ job = {}, report = {}, logs = [] }) {
+export function DeploymentReport({ job = {}, report = {}, logs = [], showJourney = true }) {
   const summary = report.summary && typeof report.summary === 'object' ? report.summary : {}
   const request = job.request || {}
   const servers = asArray(report.servers?.length ? report.servers : summary.Results).filter(s => s && s.Server)
@@ -223,7 +223,7 @@ export function DeploymentReport({ job = {}, report = {}, logs = [] }) {
         </Card>
       )}
 
-      <StageTimeline logs={logs} />
+      {showJourney && logs.length > 0 && <JourneyView lines={logs} job={{ ...job, result: report }} servers={asArray(report.servers).map(x => x.Server).filter(Boolean)} />}
       <LogIssues logs={logs} />
     </div>
   )
@@ -356,40 +356,6 @@ function KbMatrix({ validation, servers }) {
           </table>
         </div>
       )}
-    </Card>
-  )
-}
-
-function StageTimeline({ logs }) {
-  const marks = useMemo(() => {
-    const out = []
-    for (const l of logs) {
-      const text = String(l.line || '').trim()
-      const stage = STAGES.find(s => s.match?.test(text))
-      if (stage && !out.some(o => o.key === stage.key)) out.push({ key: stage.key, label: stage.label, icon: stage.icon, time: l.time, text })
-      if (/^Job finished with status/.test(text)) out.push({ key: 'done', label: 'Finished', icon: 'fa-flag-checkered', time: l.time, text })
-    }
-    return out
-  }, [logs])
-  if (!marks.length) return null
-  return (
-    <Card title="Run timeline" icon="fa-timeline" kicker="From the jumphost log">
-      <ol className="wpx-vtl">
-        {marks.map((m, i) => {
-          const next = marks[i + 1]
-          const took = next ? parseTime(next.time) - parseTime(m.time) : null
-          return (
-            <li key={`${m.key}-${i}`}>
-              <span className="wpx-vtl-dot"><i className={`fa-solid ${m.icon}`} /></span>
-              <div className="wpx-vtl-body">
-                <div className="wpx-vtl-title">{m.label}<span>{fmtUtc(m.time, { seconds: true })}</span></div>
-                <div className="wpx-vtl-text">{m.text}</div>
-              </div>
-              {took != null && !Number.isNaN(took) && <span className="wpx-vtl-took">{fmtDuration(took)}</span>}
-            </li>
-          )
-        })}
-      </ol>
     </Card>
   )
 }

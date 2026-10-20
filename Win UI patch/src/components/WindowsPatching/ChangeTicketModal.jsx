@@ -3,7 +3,7 @@ import { createChangeTicket, CHANGE_DEFAULTS } from '../../api/changeApi'
 import { Modal, Banner, Spinner, fmtUtc } from './ui'
 
 /* Raise a change request (CHG) for the patch window, prefilled from the plan. */
-export default function ChangeTicketModal({ plan, requester, onClose, onCreated }) {
+export default function ChangeTicketModal({ plan, onClose, onCreated }) {
   const [form, setForm] = useState(() => ({
     shortDescription: `Windows Server patching – ${plan.sugName || 'monthly updates'} – ${plan.servers.length} server${plan.servers.length === 1 ? '' : 's'}`,
     description:
@@ -11,8 +11,8 @@ export default function ChangeTicketModal({ plan, requester, onClose, onCreated 
       `Servers: ${plan.servers.join(', ') || '—'}\n` +
       `Maintenance window: ${fmtUtc(plan.windowStartUtc)} for ${plan.windowHours} h.\n` +
       'Updates are installed and validated per KB; servers restart inside the window.',
-    justification: 'Monthly security and quality updates to keep Windows servers compliant.',
-    backout: 'Uninstall the affected KBs from the servers (wusa /uninstall) and restart; disable the SCCM deployment.',
+    justification: '',
+    backout: '',
     category: CHANGE_DEFAULTS.category,
     type: CHANGE_DEFAULTS.type,
     risk: CHANGE_DEFAULTS.risk,
@@ -28,7 +28,6 @@ export default function ChangeTicketModal({ plan, requester, onClose, onCreated 
     try {
       const ticket = await createChangeTicket({
         ...form,
-        requestedBy: requester,
         plannedStart: plan.windowStartUtc,
         plannedEnd: end,
         configurationItems: plan.servers,
@@ -97,14 +96,9 @@ export default function ChangeTicketModal({ plan, requester, onClose, onCreated 
               <select className="wpx-input" value={form.impact} onChange={set('impact')}>{['3 - Low', '2 - Medium', '1 - High'].map(o => <option key={o}>{o}</option>)}</select>
             </label>
           </div>
-          <div className="wpx-grid-2">
-            <label className="wpx-field"><span className="wpx-label">Assignment group</span>
-              <input className="wpx-input" value={form.assignmentGroup} onChange={set('assignmentGroup')} />
-            </label>
-            <label className="wpx-field"><span className="wpx-label">Requested by</span>
-              <input className="wpx-input" value={requester} readOnly />
-            </label>
-          </div>
+          <label className="wpx-field"><span className="wpx-label">Assignment group</span>
+            <input className="wpx-input" value={form.assignmentGroup} onChange={set('assignmentGroup')} />
+          </label>
           <label className="wpx-field"><span className="wpx-label">Description</span>
             <textarea className="wpx-input" rows={4} value={form.description} onChange={set('description')} />
           </label>
