@@ -24,6 +24,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import reports  # noqa: E402  (HTML report renderers, next to this file)
@@ -33,51 +34,11 @@ import reports  # noqa: E402  (HTML report renderers, next to this file)
 # CONFIGURATION
 # ============================================================
 
-# Settings and service-account credentials come from an env file kept OUTSIDE
-# the project folder (default %USERPROFILE%\.sccm-api\sccm-api.env, or the
-# path in SCCM_ENV_FILE). Variables already set in the environment win.
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ENV_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _load_env_file():
-    explicit = os.environ.get("SCCM_ENV_FILE")
-    path = explicit or os.path.join(os.path.expanduser("~"), ".sccm-api", "sccm-api.env")
-    path = os.path.abspath(os.path.expandvars(path))
-    if os.path.normcase(path).startswith(os.path.normcase(PROJECT_DIR) + os.sep):
-        raise RuntimeError(
-            f"The env file {path} is inside the project folder. Keep credentials outside it, "
-            r"e.g. %USERPROFILE%\.sccm-api\sccm-api.env (or set SCCM_ENV_FILE)."
-        )
-    if not os.path.isfile(path):
-        if explicit:
-            raise RuntimeError(f"SCCM_ENV_FILE points to {path}, which does not exist.")
-        return None, []
-
-    loaded = []
-    with open(path, encoding="utf-8-sig") as handle:
-        for number, raw in enumerate(handle, 1):
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.lower().startswith("export "):
-                line = line[7:].lstrip()
-            name, separator, value = line.partition("=")
-            name = name.strip()
-            if not separator or not ENV_NAME_PATTERN.match(name):
-                raise RuntimeError(f"{path} line {number}: expected NAME=value.")
-            value = value.strip()
-            # Whole value in matching quotes: strip them. No inline comments,
-            # so passwords may contain '#'.
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-                value = value[1:-1]
-            if name not in os.environ:
-                os.environ[name] = value
-                loaded.append(name)
-    return path, loaded
-
-
-ENV_FILE, ENV_FILE_NAMES = _load_env_file()
+# Settings and service-account credentials come from API\.env (python-dotenv;
+# the file is git-ignored). SCCM_ENV_FILE may point to another file.
+# Variables already set in the environment win.
+ENV_FILE = os.environ.get("SCCM_ENV_FILE") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+ENV_FILE_LOADED = load_dotenv(ENV_FILE)
 
 # Prompts are only a fallback for interactive starts; a background start
 # (scheduled task, service) never waits for input. SCCM_NO_PROMPT=true
@@ -92,7 +53,7 @@ SETTING_SOURCES = {}
 def _setting(name: str, prompt: str = "", secret: bool = False) -> str:
     value = os.environ.get(name)
     if value:
-        SETTING_SOURCES[name] = "env file" if name in ENV_FILE_NAMES else "environment"
+        SETTING_SOURCES[name] = "set"
         return value if secret else value.strip()
     if prompt and INTERACTIVE:
         try:
@@ -190,8 +151,8 @@ DB_PATH = _env(
 API_KEY = _setting("SCCM_API_KEY")
 if not API_KEY:
     raise RuntimeError(
-        "SCCM_API_KEY is not set. Add it to the env file "
-        r"(%USERPROFILE%\.sccm-api\sccm-api.env or SCCM_ENV_FILE)."
+        f"SCCM_API_KEY is not set. Add it to {ENV_FILE}"
+        + ("" if ENV_FILE_LOADED else " (file not found)") + "."
     )
 
 # Optional second key for admin actions (releasing the deployment lock).
@@ -233,8 +194,7 @@ DSLAB_PASSWORD = _setting(
 )
 
 print(
-    f"Env file: {ENV_FILE or 'none found'}"
-    f"{' (' + str(len(ENV_FILE_NAMES)) + ' settings loaded)' if ENV_FILE else ''}\n"
+    f"Env file: {ENV_FILE} ({'loaded' if ENV_FILE_LOADED else 'not found'})\n"
     f"Jumphost login: {USERNAME} (username: {SETTING_SOURCES.get('SCCM_USERNAME')}, "
     f"password: {SETTING_SOURCES.get('SCCM_PASSWORD')}); endpoint '{SESSION_CONFIG}' on {JUMPHOST}\n"
     f"Project root on the jumphost: {PROJECT_ROOT}\n"

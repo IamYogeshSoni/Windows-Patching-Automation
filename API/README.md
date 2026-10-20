@@ -62,16 +62,19 @@ Docs: [API-Integration.md](API-Integration.md) (frontend), [API-Testing.md](API-
 
 ## Starting the API (Cloud PC)
 
-### 1. Env file with the service-account credentials (once)
-The API reads its settings and passwords from an env file **outside the project folder**. Nothing is pasted into the terminal.
+### 0. Python packages (once)
 ```powershell
-New-Item -ItemType Directory "$env:USERPROFILE\.sccm-api" -Force | Out-Null
-Copy-Item .\sccm-api.env.example "$env:USERPROFILE\.sccm-api\sccm-api.env"
-notepad "$env:USERPROFILE\.sccm-api\sccm-api.env"          # fill in the values
-icacls "$env:USERPROFILE\.sccm-api\sccm-api.env" /inheritance:r /grant:r "$($env:USERNAME):F"
+pip install -r requirements.txt
 ```
-- Default location: `%USERPROFILE%\.sccm-api\sccm-api.env`. Elsewhere: `$env:SCCM_ENV_FILE = 'D:\secure\sccm-api.env'`.
-- The API **refuses to start** if the env file is inside the project folder.
+
+### 1. Env file with the service-account credentials (once)
+The API reads its settings and passwords from `API\.env` (python-dotenv). Nothing is pasted into the terminal. `.env` is git-ignored; never commit it.
+```powershell
+Copy-Item .\.env.example .\.env
+notepad .\.env          # fill in the values
+```
+- Another file: `$env:SCCM_ENV_FILE = 'D:\secure\sccm-api.env'` before starting.
+- Quote values that contain `#` or spaces: `SCCM_PASSWORD="p#ss word"`.
 - Required keys:
   - `SCCM_API_KEY`
   - `SCCM_USERNAME` / `SCCM_PASSWORD` (jumphost login, `SCCMAutomation` endpoint)
